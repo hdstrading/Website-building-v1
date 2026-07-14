@@ -108,6 +108,7 @@
       pagibigNo: '1234-5678-9012', tin: '123-456-789-000',
       emergencyName: 'Ana Dela Cruz', emergencyRelation: 'Spouse', emergencyContact: '0918-765-4321',
       bankName: 'BDO', bankAccountName: 'Juan R. Dela Cruz', bankAccountNumber: '0012-3456-7890',
+      employmentStatus: 'regular', leaveCreditsPerYear: 5, leaveCreditsUsed: 0,
       contributionBasis: 'basic', active: true
     };
     var e2 = {
@@ -122,6 +123,7 @@
       pagibigNo: '9876-5432-1098', tin: '987-654-321-000',
       emergencyName: 'Pedro Santos', emergencyRelation: 'Spouse', emergencyContact: '0921-444-5555',
       bankName: 'BPI', bankAccountName: 'Maria L. Santos', bankAccountNumber: '3344-5566-77',
+      employmentStatus: 'regular', leaveCreditsPerYear: 5, leaveCreditsUsed: 1,
       contributionBasis: 'basic', active: true
     };
     db.employees.push(e1, e2);

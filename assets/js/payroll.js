@@ -60,7 +60,8 @@
       basicPay = round2(r.monthlyBasic / ppm);
       dtr = { regularPay: basicPay, overtimePay: 0, nightDiffPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
-        paidLeaves: 0, regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
+        paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0,
+        regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
         lateMinutes: 0, undertimeMinutes: 0, details: [] };
     }
 
@@ -69,6 +70,29 @@
     earnings.push({ name: 'Basic Pay', amount: basicPay, taxable: true });
     if (dtr.overtimePay) earnings.push({ name: 'Overtime Pay', amount: dtr.overtimePay, taxable: true });
     if (dtr.nightDiffPay) earnings.push({ name: 'Night Differential', amount: dtr.nightDiffPay, taxable: true });
+
+    // Unworked regular-holiday pay (100% of daily rate per unworked reg. holiday).
+    if (dtr.holidayDaysUnworked) {
+      earnings.push({ name: 'Holiday Pay (' + dtr.holidayDaysUnworked + ' day' +
+        (dtr.holidayDaysUnworked > 1 ? 's' : '') + ')',
+        amount: round2(dtr.holidayDaysUnworked * r.daily), taxable: true });
+    }
+
+    // Service Incentive Leave: pay requested leave days, capped by remaining credits.
+    var leaveRemaining = Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0));
+    var leaveDaysPaid = Math.min(dtr.leaveDaysRequested || 0, leaveRemaining);
+    if (leaveDaysPaid > 0) {
+      earnings.push({ name: 'Leave Pay (' + leaveDaysPaid + ' day' +
+        (leaveDaysPaid > 1 ? 's' : '') + ')',
+        amount: round2(leaveDaysPaid * r.daily), taxable: true });
+    }
+    var leaveInfo = {
+      requested: dtr.leaveDaysRequested || 0,
+      paid: leaveDaysPaid,
+      creditsPerYear: emp.leaveCreditsPerYear || 0,
+      remainingBefore: leaveRemaining,
+      remainingAfter: leaveRemaining - leaveDaysPaid
+    };
 
     // Recurring allowances (prorated by period, unless per-period already).
     (ctx.allowances || []).forEach(function (a) {
@@ -148,6 +172,8 @@
       loanDeductions: loanDeductions,
       deductions: deductions,
       totalDeductions: totalDeductions,
+      leave: leaveInfo,
+      employmentStatus: emp.employmentStatus || '',
       netPay: netPay
     };
   }
@@ -176,7 +202,7 @@
     var S = PH.storage;
     var results = runPeriod(period);
     S.db.payrolls[period.id] = results;
-    // Apply loan amortizations to balances.
+    // Apply loan amortizations to balances, and consume used leave credits.
     Object.keys(results).forEach(function (empId) {
       (results[empId].loanDeductions || []).forEach(function (ld) {
         var loan = S.find('loans', ld.id);
@@ -185,6 +211,11 @@
           if (loan.balance <= 0) loan.active = false;
         }
       });
+      var lv = results[empId].leave;
+      if (lv && lv.paid > 0) {
+        var emp = S.find('employees', empId);
+        if (emp) emp.leaveCreditsUsed = (emp.leaveCreditsUsed || 0) + lv.paid;
+      }
     });
     period.status = 'finalized';
     S.upsert('periods', period);

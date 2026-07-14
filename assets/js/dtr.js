@@ -137,6 +137,8 @@
   function computeDTR(days, hourlyRate, opts) {
     var summary = {
       daysPresent: 0, daysAbsent: 0, paidLeaves: 0,
+      holidayDaysUnworked: 0,   // unworked REGULAR holidays -> paid at 100%
+      leaveDaysRequested: 0,    // unworked paid-leave days (gated by credits in payroll)
       regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
       lateMinutes: 0, undertimeMinutes: 0,
       regularPay: 0, overtimePay: 0, nightDiffPay: 0,
@@ -149,6 +151,14 @@
       if (r.absent) summary.daysAbsent++;
       else if (r.paidLeave && r.workedMinutes === 0) summary.paidLeaves++;
       else if (r.workedMinutes > 0) summary.daysPresent++;
+      // Unworked-day pay rules (Labor Code):
+      //  - Regular holiday not worked => still paid 100% of daily rate.
+      //  - Paid leave day => counted here, paid later if leave credits remain.
+      //  - Special non-working day not worked => no work, no pay (nothing added).
+      if (!r.absent && r.workedMinutes === 0) {
+        if (/regular_hol/.test(r.dayType)) { summary.holidayDaysUnworked++; r.unworkedHoliday = true; }
+        else if (r.paidLeave) summary.leaveDaysRequested++;
+      }
       summary.regularMinutes += r.regularMinutes;
       summary.otMinutes += r.otMinutes;
       summary.nightDiffMinutes += r.nightDiffMinutes;
@@ -246,11 +256,14 @@
     return v === '1' || v === 'y' || v === 'yes' || v === 'true' || v === 'x';
   }
   function normaliseType(v) {
-    v = String(v || '').trim().toLowerCase();
+    // Strip spaces/underscores/punctuation so "regular_holiday", "Regular Holiday"
+    // and "regularholiday" all match.
+    v = String(v || '').trim().toLowerCase().replace(/[^a-z]/g, '');
     if (!v) return 'regular';
-    if (/regular\s*hol/.test(v) || v === 'rh') return 'regular_holiday';
-    if (/special/.test(v) || v === 'sh' || v === 'snw') return 'special';
-    if (/rest/.test(v)) return 'rest_day';
+    if (v === 'rh' || (v.indexOf('regular') >= 0 && v.indexOf('hol') >= 0)) return 'regular_holiday';
+    if (v.indexOf('special') >= 0 || v === 'sh' || v === 'snw' || v === 'snwh') return 'special';
+    if (v.indexOf('rest') >= 0) return 'rest_day';
+    if (v.indexOf('hol') >= 0) return 'regular_holiday'; // bare "holiday" => regular holiday
     return 'regular';
   }
 
