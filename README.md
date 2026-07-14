@@ -112,6 +112,20 @@ persist with your data.
 
 ---
 
+## 📱 Android app (tablet-ready)
+
+The same app is also packaged as a native **Android app** for tablets/phones —
+a thin WebView wrapper around this exact offline web app. The easiest way to get
+it is the built-in **GitHub Actions** build:
+
+1. GitHub → **Actions** tab → **“Build Android APK”** → (runs on each push to
+   `main`, or **Run workflow**).
+2. Download the **`ph-payroll-apk`** artifact and install `app-debug.apk` on the
+   tablet (allow “install unknown apps” when prompted).
+
+Full details, local build steps, and Play Store notes are in
+[`android/README.md`](android/README.md).
+
 ## 🗂️ Project structure
 
 ```

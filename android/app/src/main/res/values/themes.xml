@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Full-screen WebView host; no action bar. -->
+    <style name="Theme.PHPayroll" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@color/brand_dark</item>
+        <item name="android:colorPrimary">@color/brand</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

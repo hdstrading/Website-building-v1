@@ -756,11 +756,14 @@
 
   // Generic print helper: opens a print window (use "Save as PDF" as the
   // destination to download). Fully offline — no external libraries.
+  // On Android the native bridge prints via the OS print framework.
   function printHTML(title, bodyHTML) {
+    var fullHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) +
+      '</title><style>' + PAYSLIP_PRINT_CSS + '</style></head><body>' + bodyHTML + '</body></html>';
+    if (PH.platform && PH.platform.print(title, fullHtml)) return;
     var w = window.open('', '_blank');
     if (!w) { alert('Please allow pop-ups to print / download the PDF.'); return; }
-    w.document.write('<html><head><title>' + esc(title) + '</title>' +
-      '<style>' + PAYSLIP_PRINT_CSS + '</style></head><body>' + bodyHTML + '</body></html>');
+    w.document.write(fullHtml);
     w.document.close();
     w.focus();
     setTimeout(function () { w.print(); }, 300);
@@ -1083,6 +1086,11 @@
     setTimeout(function () { t.classList.remove('show'); setTimeout(function () { t.remove(); }, 300); }, 2200);
   }
   function downloadFile(name, content, type) {
+    // On Android, save to the device's Downloads via the native bridge.
+    if (PH.platform && PH.platform.saveFile(name, content, type)) {
+      toast('Saved to Downloads: ' + name);
+      return;
+    }
     var blob = new Blob([content], { type: type });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name;
