@@ -855,10 +855,32 @@
         '<p class="muted">Net pay and bank details per employee, for the bank salary-credit file.</p>' +
         '<div class="dtr-scroll">' + financeTable(results, ids) + '</div>',
         '<button class="btn-sm" id="finPrint">Download PDF / Print</button>' +
-        '<button class="btn-sm" id="finCsv">Export CSV</button>');
+        '<button class="btn-sm" id="finCsv">Export CSV</button>') +
+      remittanceCard('sss', 'C. SSS — Contribution Collection List (R-3)',
+        'Monthly SSS contributions per employee, for filing/remittance to SSS.') +
+      remittanceCard('philhealth', 'D. PhilHealth — Remittance Report (RF-1)',
+        'Monthly PhilHealth premiums per employee, for filing/remittance to PhilHealth.') +
+      remittanceCard('pagibig', 'E. Pag-IBIG — Contribution Remittance (MCRF)',
+        'Monthly Pag-IBIG (HDMF) contributions per employee, for remittance to Pag-IBIG.') +
+      '<p class="disclaimer">💡 Remittance figures are each employee\'s <b>monthly</b> contribution (based on their ' +
+      'contribution basis), shown independently of pay cut-offs. Verify member numbers and totals before filing.</p>';
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
+    });
+    ['sss', 'philhealth', 'pagibig'].forEach(function (kind) {
+      var monthLabel = remitMonthLabel(period);
+      v.querySelector('[data-remit-print="' + kind + '"]').addEventListener('click', function () {
+        printHTML(remitTitle(kind) + ' — ' + monthLabel,
+          '<h2>' + esc(remitTitle(kind)) + '</h2>' +
+          '<div class="rpt-sub">' + esc(S.db.meta.company.name) +
+          (S.db.meta.company.tin ? ' • TIN ' + esc(S.db.meta.company.tin) : '') +
+          ' • For the month of ' + esc(monthLabel) + '</div>' +
+          remittanceTable(kind));
+      });
+      v.querySelector('[data-remit-csv="' + kind + '"]').addEventListener('click', function () {
+        exportRemittanceCSV(kind, monthLabel);
+      });
     });
     v.querySelector('#accPrint').addEventListener('click', function () {
       printHTML('Accounting Report — ' + period.name,
@@ -963,6 +985,111 @@
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_salary_credit.csv', lines.join('\n'), 'text/csv');
   }
+
+  /* ---- Government remittance reports (monthly) ---- */
+  function remitTitle(kind) {
+    return {
+      sss: 'SSS Contribution Collection List (R-3)',
+      philhealth: 'PhilHealth Remittance Report (RF-1)',
+      pagibig: 'Pag-IBIG Contribution Remittance (MCRF)'
+    }[kind];
+  }
+  function remitMonthLabel(period) {
+    // Prefer the period's coverage month; fall back to the period name.
+    var d = period && period.endDate ? new Date(period.endDate) : new Date();
+    if (isNaN(d.getTime())) return (period && period.name) || '';
+    return d.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+  }
+  // Monthly contribution snapshot for every active employee.
+  function remittanceData() {
+    return S.list('employees').filter(function (e) { return e.active !== false; }).map(function (e) {
+      var basis = PH.payroll.rates(e).monthlyBasic;
+      var c = PH.statutory.computeContributions(basis);
+      return { emp: e, basis: basis, sss: c.sss, philhealth: c.philhealth, pagibig: c.pagibig };
+    });
+  }
+  function remittanceTable(kind) {
+    var data = remittanceData();
+    if (!data.length) return '<p class="muted">No active employees to report.</p>';
+    var head, bodyFn, tot;
+    if (kind === 'sss') {
+      head = '<tr><th>SSS No.</th><th>Employee Name</th><th class="num">MSC</th><th class="num">EE</th>' +
+        '<th class="num">ER</th><th class="num">EC</th><th class="num">Total</th></tr>';
+      tot = { ee: 0, er: 0, ec: 0, t: 0 };
+      bodyFn = function (d) {
+        var total = PH.statutory.round2(d.sss.ee + d.sss.er + d.sss.ec);
+        tot.ee += d.sss.ee; tot.er += d.sss.er; tot.ec += d.sss.ec; tot.t += total;
+        return '<td>' + esc(d.emp.sssNo || '—') + '</td><td>' + esc(name(d.emp)) +
+          '</td><td class="num">' + money(d.sss.msc) + '</td><td class="num">' + money(d.sss.ee) +
+          '</td><td class="num">' + money(d.sss.er) + '</td><td class="num">' + money(d.sss.ec) +
+          '</td><td class="num"><b>' + money(total) + '</b></td>';
+      };
+    } else if (kind === 'philhealth') {
+      head = '<tr><th>PhilHealth No.</th><th>Employee Name</th><th class="num">Salary Base</th>' +
+        '<th class="num">EE</th><th class="num">ER</th><th class="num">Total</th></tr>';
+      tot = { ee: 0, er: 0, t: 0 };
+      bodyFn = function (d) {
+        tot.ee += d.philhealth.ee; tot.er += d.philhealth.er; tot.t += d.philhealth.total;
+        return '<td>' + esc(d.emp.philhealthNo || '—') + '</td><td>' + esc(name(d.emp)) +
+          '</td><td class="num">' + money(d.philhealth.base) + '</td><td class="num">' + money(d.philhealth.ee) +
+          '</td><td class="num">' + money(d.philhealth.er) + '</td><td class="num"><b>' + money(d.philhealth.total) + '</b></td>';
+      };
+    } else { // pagibig
+      head = '<tr><th>Pag-IBIG MID No.</th><th>Employee Name</th><th class="num">EE</th>' +
+        '<th class="num">ER</th><th class="num">Total</th></tr>';
+      tot = { ee: 0, er: 0, t: 0 };
+      bodyFn = function (d) {
+        tot.ee += d.pagibig.ee; tot.er += d.pagibig.er; tot.t += d.pagibig.total;
+        return '<td>' + esc(d.emp.pagibigNo || '—') + '</td><td>' + esc(name(d.emp)) +
+          '</td><td class="num">' + money(d.pagibig.ee) + '</td><td class="num">' + money(d.pagibig.er) +
+          '</td><td class="num"><b>' + money(d.pagibig.total) + '</b></td>';
+      };
+    }
+    var rows = data.map(function (d) { return '<tr>' + bodyFn(d) + '</tr>'; }).join('');
+    var span = kind === 'sss' ? 3 : (kind === 'philhealth' ? 3 : 2);
+    var footCells = kind === 'sss'
+      ? '<td class="num"><b>' + money(tot.ee) + '</b></td><td class="num"><b>' + money(tot.er) +
+        '</b></td><td class="num"><b>' + money(tot.ec) + '</b></td><td class="num"><b>' + money(tot.t) + '</b></td>'
+      : '<td class="num"><b>' + money(tot.ee) + '</b></td><td class="num"><b>' + money(tot.er) +
+        '</b></td><td class="num"><b>' + money(tot.t) + '</b></td>';
+    return '<table class="tbl rpt-tbl"><thead>' + head + '</thead><tbody>' + rows +
+      '</tbody><tfoot><tr><td colspan="' + span + '"><b>TOTALS</b></td>' + footCells + '</tr></tfoot></table>';
+  }
+  function remittanceCard(kind, title, desc) {
+    return card(title,
+      '<p class="muted">' + desc + '</p><div class="dtr-scroll">' + remittanceTable(kind) + '</div>',
+      '<button class="btn-sm" data-remit-print="' + kind + '">Download PDF / Print</button>' +
+      '<button class="btn-sm" data-remit-csv="' + kind + '">Export CSV</button>');
+  }
+  function exportRemittanceCSV(kind, monthLabel) {
+    var data = remittanceData();
+    var lines, fname;
+    if (kind === 'sss') {
+      lines = [['SSS No.', 'Name', 'MSC', 'EE', 'ER', 'EC', 'Total'].join(',')];
+      data.forEach(function (d) {
+        var t = (d.sss.ee + d.sss.er + d.sss.ec).toFixed(2);
+        lines.push([d.emp.sssNo || '', name(d.emp), d.sss.msc, d.sss.ee.toFixed(2), d.sss.er.toFixed(2),
+          d.sss.ec.toFixed(2), t].map(csvCell).join(','));
+      });
+      fname = 'SSS_R3';
+    } else if (kind === 'philhealth') {
+      lines = [['PhilHealth No.', 'Name', 'Salary Base', 'EE', 'ER', 'Total'].join(',')];
+      data.forEach(function (d) {
+        lines.push([d.emp.philhealthNo || '', name(d.emp), d.philhealth.base, d.philhealth.ee.toFixed(2),
+          d.philhealth.er.toFixed(2), d.philhealth.total.toFixed(2)].map(csvCell).join(','));
+      });
+      fname = 'PhilHealth_RF1';
+    } else {
+      lines = [['Pag-IBIG MID No.', 'Name', 'EE', 'ER', 'Total'].join(',')];
+      data.forEach(function (d) {
+        lines.push([d.emp.pagibigNo || '', name(d.emp), d.pagibig.ee.toFixed(2),
+          d.pagibig.er.toFixed(2), d.pagibig.total.toFixed(2)].map(csvCell).join(','));
+      });
+      fname = 'PagIBIG_MCRF';
+    }
+    downloadFile(fname + '_' + monthLabel.replace(/[^\w]+/g, '_') + '.csv', lines.join('\n'), 'text/csv');
+  }
+  function name(e) { return e.lastName + ', ' + e.firstName + (e.middleName ? ' ' + e.middleName.charAt(0) + '.' : ''); }
 
   function csvCell(v) {
     v = String(v == null ? '' : v);
