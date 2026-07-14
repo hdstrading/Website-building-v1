@@ -1,0 +1,268 @@
+/* ==========================================================================
+ * dtr.js — Daily Time Record parsing & hours computation
+ * --------------------------------------------------------------------------
+ * Parses uploaded DTR (CSV), computes worked hours, overtime, night
+ * differential, tardiness and undertime, and applies DOLE premium rates
+ * per day type (regular / rest day / special / regular holiday).
+ * ========================================================================== */
+(function (PH) {
+  'use strict';
+
+  // DOLE premium multipliers applied to the hourly rate.
+  // Reference: Labor Code of the Philippines / DOLE Handbook on Workers'
+  // Statutory Monetary Benefits.
+  var DAY_TYPES = {
+    regular:          { label: 'Regular Day',            regular: 1.00, ot: 1.25 },
+    rest_day:         { label: 'Rest Day',               regular: 1.30, ot: 1.69 },
+    special:          { label: 'Special Non-Working Day',regular: 1.30, ot: 1.69 },
+    special_rest:     { label: 'Special Day + Rest Day', regular: 1.50, ot: 1.95 },
+    regular_holiday:  { label: 'Regular Holiday',        regular: 2.00, ot: 2.60 },
+    regular_hol_rest: { label: 'Regular Holiday + Rest', regular: 2.60, ot: 3.38 }
+  };
+
+  var NIGHT_DIFF_RATE = 0.10;   // +10% for hours 22:00–06:00
+  var NIGHT_START = 22 * 60;    // minutes from midnight
+  var NIGHT_END = 6 * 60;
+  var STANDARD_DAY_MINUTES = 8 * 60;
+
+  function toMinutes(t) {
+    if (t == null || t === '') return null;
+    t = String(t).trim();
+    // Accept "HH:MM", "H:MM AM/PM", "HHMM"
+    var ampm = null;
+    var m = t.match(/(am|pm)$/i);
+    if (m) { ampm = m[1].toLowerCase(); t = t.replace(/\s*(am|pm)$/i, '').trim(); }
+    var parts, h, min;
+    if (t.indexOf(':') >= 0) {
+      parts = t.split(':');
+      h = parseInt(parts[0], 10);
+      min = parseInt(parts[1], 10) || 0;
+    } else if (/^\d{3,4}$/.test(t)) {
+      h = parseInt(t.slice(0, t.length - 2), 10);
+      min = parseInt(t.slice(-2), 10);
+    } else {
+      h = parseInt(t, 10); min = 0;
+    }
+    if (isNaN(h)) return null;
+    if (ampm === 'pm' && h < 12) h += 12;
+    if (ampm === 'am' && h === 12) h = 0;
+    return h * 60 + (min || 0);
+  }
+
+  // Minutes worked that fall inside the night-differential window (22:00–06:00).
+  function nightMinutes(start, end) {
+    if (start == null || end == null) return 0;
+    var total = 0;
+    // Walk each minute-block; handle shifts crossing midnight by adding 1440.
+    if (end <= start) end += 24 * 60;
+    for (var t = start; t < end; t++) {
+      var m = t % (24 * 60);
+      if (m >= NIGHT_START || m < NIGHT_END) total++;
+    }
+    return total;
+  }
+
+  /* Compute one day's figures.
+   * day = { date, dayType, restDay, timeIn, timeOut, breakMins, requiredMinutes,
+   *         absent, leavePaid }
+   */
+  function computeDay(day, opts) {
+    opts = opts || {};
+    var required = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
+    var result = {
+      date: day.date,
+      dayType: day.dayType || 'regular',
+      restDay: !!day.restDay,
+      workedMinutes: 0, regularMinutes: 0, otMinutes: 0,
+      nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0,
+      absent: !!day.absent, paidLeave: !!day.leavePaid
+    };
+
+    // Resolve effective day type (rest-day upgrades)
+    var dt = day.dayType || 'regular';
+    if (day.restDay) {
+      if (dt === 'regular') dt = 'rest_day';
+      else if (dt === 'special') dt = 'special_rest';
+      else if (dt === 'regular_holiday') dt = 'regular_hol_rest';
+    }
+    result.dayType = dt;
+
+    if (day.absent) return result;
+
+    var inM = toMinutes(day.timeIn);
+    var outM = toMinutes(day.timeOut);
+    if (inM == null || outM == null) {
+      // No punches but flagged paid leave / holiday-with-pay handled by payroll
+      return result;
+    }
+    var span = outM - inM;
+    if (span <= 0) span += 24 * 60; // crossed midnight
+    var brk = day.breakMins != null ? day.breakMins : (opts.defaultBreak || 60);
+    var worked = Math.max(0, span - brk);
+
+    result.workedMinutes = worked;
+    result.regularMinutes = Math.min(worked, required);
+    result.otMinutes = Math.max(0, worked - required);
+
+    // Tardiness: time-in later than scheduled start
+    if (day.scheduledIn != null) {
+      var schedIn = toMinutes(day.scheduledIn);
+      if (schedIn != null && inM > schedIn) result.lateMinutes = inM - schedIn;
+    }
+    // Undertime: worked less than required (only on a working day)
+    if (worked < required && dt === 'regular') {
+      result.undertimeMinutes = required - worked;
+    }
+
+    result.nightDiffMinutes = nightMinutes(inM, outM);
+    return result;
+  }
+
+  /* Compute pay for one day given the employee hourly rate. */
+  function computeDayPay(dayResult, hourlyRate) {
+    var mult = DAY_TYPES[dayResult.dayType] || DAY_TYPES.regular;
+    var perMin = hourlyRate / 60;
+    var regularPay = dayResult.regularMinutes * perMin * mult.regular;
+    var otPay = dayResult.otMinutes * perMin * mult.ot;
+    var ndPay = dayResult.nightDiffMinutes * perMin * NIGHT_DIFF_RATE;
+    return {
+      regular: PH.statutory.round2(regularPay),
+      overtime: PH.statutory.round2(otPay),
+      nightDiff: PH.statutory.round2(ndPay),
+      total: PH.statutory.round2(regularPay + otPay + ndPay)
+    };
+  }
+
+  /* Summarise & price a full period of DTR days. */
+  function computeDTR(days, hourlyRate, opts) {
+    var summary = {
+      daysPresent: 0, daysAbsent: 0, paidLeaves: 0,
+      regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
+      lateMinutes: 0, undertimeMinutes: 0,
+      regularPay: 0, overtimePay: 0, nightDiffPay: 0,
+      details: []
+    };
+    (days || []).forEach(function (d) {
+      var r = computeDay(d, opts);
+      var pay = computeDayPay(r, hourlyRate);
+      r.pay = pay;
+      if (r.absent) summary.daysAbsent++;
+      else if (r.paidLeave && r.workedMinutes === 0) summary.paidLeaves++;
+      else if (r.workedMinutes > 0) summary.daysPresent++;
+      summary.regularMinutes += r.regularMinutes;
+      summary.otMinutes += r.otMinutes;
+      summary.nightDiffMinutes += r.nightDiffMinutes;
+      summary.lateMinutes += r.lateMinutes;
+      summary.undertimeMinutes += r.undertimeMinutes;
+      summary.regularPay += pay.regular;
+      summary.overtimePay += pay.overtime;
+      summary.nightDiffPay += pay.nightDiff;
+      summary.details.push(r);
+    });
+    // Tardiness / undertime deduction (in peso)
+    var perMin = hourlyRate / 60;
+    summary.lateDeduction = PH.statutory.round2(summary.lateMinutes * perMin);
+    summary.undertimeDeduction = PH.statutory.round2(summary.undertimeMinutes * perMin);
+    ['regularPay', 'overtimePay', 'nightDiffPay'].forEach(function (k) {
+      summary[k] = PH.statutory.round2(summary[k]);
+    });
+    return summary;
+  }
+
+  /* ---- CSV parsing ------------------------------------------------------- */
+  function parseCSV(text) {
+    var rows = [];
+    var row = [], field = '', inQuotes = false;
+    for (var i = 0; i < text.length; i++) {
+      var c = text[i];
+      if (inQuotes) {
+        if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+        else if (c === '"') inQuotes = false;
+        else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { row.push(field); field = ''; }
+        else if (c === '\r') { /* skip */ }
+        else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+        else field += c;
+      }
+    }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(function (r) { return r.some(function (x) { return x.trim() !== ''; }); });
+  }
+
+  /* Import DTR CSV into per-employee day arrays keyed by employee code.
+   * Expected headers (case-insensitive, flexible):
+   *   EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay,
+   *   ScheduledIn, Absent, PaidLeave, RequiredHours
+   */
+  function importDTRCsv(text) {
+    var rows = parseCSV(text);
+    if (!rows.length) return {};
+    var header = rows[0].map(function (h) { return h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); });
+    function idx() {
+      for (var a = 0; a < arguments.length; a++) {
+        var j = header.indexOf(arguments[a]);
+        if (j >= 0) return j;
+      }
+      return -1;
+    }
+    var iCode = idx('employeecode', 'code', 'employeeid', 'empid', 'id');
+    var iDate = idx('date');
+    var iIn = idx('timein', 'in', 'am_in', 'amin');
+    var iOut = idx('timeout', 'out', 'pm_out', 'pmout');
+    var iBreak = idx('break', 'breakmins', 'breakminutes');
+    var iType = idx('daytype', 'type', 'holiday');
+    var iRest = idx('restday', 'rest');
+    var iSched = idx('scheduledin', 'schedin', 'shiftstart');
+    var iAbsent = idx('absent');
+    var iLeave = idx('paidleave', 'leave');
+    var iReq = idx('requiredhours', 'requiredhrs', 'reqhours');
+
+    var out = {};
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      var code = (iCode >= 0 ? row[iCode] : '').trim();
+      if (!code) continue;
+      var d = {
+        date: iDate >= 0 ? row[iDate].trim() : '',
+        timeIn: iIn >= 0 ? row[iIn].trim() : '',
+        timeOut: iOut >= 0 ? row[iOut].trim() : '',
+        breakMins: iBreak >= 0 && row[iBreak].trim() !== '' ? parseInt(row[iBreak], 10) : undefined,
+        dayType: normaliseType(iType >= 0 ? row[iType].trim() : ''),
+        restDay: iRest >= 0 ? truthy(row[iRest]) : false,
+        scheduledIn: iSched >= 0 ? row[iSched].trim() : undefined,
+        absent: iAbsent >= 0 ? truthy(row[iAbsent]) : false,
+        leavePaid: iLeave >= 0 ? truthy(row[iLeave]) : false,
+        requiredMinutes: iReq >= 0 && row[iReq].trim() !== '' ? Math.round(parseFloat(row[iReq]) * 60) : undefined
+      };
+      (out[code] = out[code] || []).push(d);
+    }
+    return out;
+  }
+
+  function truthy(v) {
+    v = String(v || '').trim().toLowerCase();
+    return v === '1' || v === 'y' || v === 'yes' || v === 'true' || v === 'x';
+  }
+  function normaliseType(v) {
+    v = String(v || '').trim().toLowerCase();
+    if (!v) return 'regular';
+    if (/regular\s*hol/.test(v) || v === 'rh') return 'regular_holiday';
+    if (/special/.test(v) || v === 'sh' || v === 'snw') return 'special';
+    if (/rest/.test(v)) return 'rest_day';
+    return 'regular';
+  }
+
+  PH.dtr = {
+    DAY_TYPES: DAY_TYPES,
+    NIGHT_DIFF_RATE: NIGHT_DIFF_RATE,
+    toMinutes: toMinutes,
+    nightMinutes: nightMinutes,
+    computeDay: computeDay,
+    computeDayPay: computeDayPay,
+    computeDTR: computeDTR,
+    parseCSV: parseCSV,
+    importDTRCsv: importDTRCsv
+  };
+})(window.PH = window.PH || {});
