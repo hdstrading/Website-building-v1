@@ -15,6 +15,7 @@
     });
   };
   var hrs = function (mins) { return (mins / 60).toFixed(2) + 'h'; };
+  var cap = function (s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—'; };
   var qs = function (sel, root) { return (root || document).querySelector(sel); };
 
   var state = { view: 'dashboard', selectedPeriod: null, lastRun: null };
@@ -171,6 +172,9 @@
       '<h4 class="form-section">Employment</h4><div class="grid2">' +
         txt('position', 'Position') + txt('department', 'Department') +
         txt('hireDate', 'Date Hired', 'date') + txt('regularizationDate', 'Regularization Date', 'date') +
+        field('Employment Status',
+          select('employmentStatus', [['probationary','Probationary'],['regular','Regular'],['contractual','Contractual']], emp.employmentStatus || 'probationary') +
+          '<small class="hint">Regular employees are entitled to Service Incentive Leave.</small>') +
         field('Employment Type', select('employmentType', ['monthly', 'daily', 'hourly'], emp.employmentType)) +
         field('Basic Salary / Rate',
           '<input name="basicSalary" type="number" step="0.01" value="' + (emp.basicSalary || '') + '">' +
@@ -182,6 +186,14 @@
         field('Rest Day', select('restDay', [['0','Sunday'],['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],['5','Friday'],['6','Saturday']], String(emp.restDay || 0))) +
         field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
         field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
+      '</div>' +
+      '<h4 class="form-section">Leave Credits (Service Incentive Leave)</h4><div class="grid2">' +
+        field('Leave Credits / Year',
+          '<input name="leaveCreditsPerYear" type="number" step="0.5" value="' + (emp.leaveCreditsPerYear != null ? emp.leaveCreditsPerYear : (emp.employmentStatus === 'regular' ? 5 : 0)) + '">' +
+          '<small class="hint">Regular employees: 5 days (SIL). Set 0 for probationary/contractual.</small>') +
+        field('Leave Credits Used',
+          '<input name="leaveCreditsUsed" type="number" step="0.5" value="' + (emp.leaveCreditsUsed || 0) + '">' +
+          '<small class="hint">Auto-increases when paid leave is taken. Reset to 0 at the start of each year.</small>') +
       '</div>' +
       '<h4 class="form-section">Government IDs</h4><div class="grid2">' +
         txt('sssNo', 'SSS No.') + txt('philhealthNo', 'PhilHealth No.') +
@@ -202,6 +214,8 @@
       data.dailyRateFactor = parseInt(data.dailyRateFactor, 10) || 313;
       data.workDaysPerWeek = parseInt(data.workDaysPerWeek, 10) || 6;
       data.restDay = parseInt(data.restDay, 10) || 0;
+      data.leaveCreditsPerYear = parseFloat(data.leaveCreditsPerYear) || 0;
+      data.leaveCreditsUsed = parseFloat(data.leaveCreditsUsed) || 0;
       data.active = data.active === 'true';
       if (!data.code || !data.lastName) { alert('Code and Last Name are required.'); return false; }
       S.upsert('employees', data);
@@ -241,9 +255,13 @@
           row('Home Address', emp.address) + '</table></div>' +
         '<div><h4>Employment</h4><table class="f201-tbl">' +
           row('Position', emp.position) + row('Department', emp.department) +
+          row('Employment Status', cap(emp.employmentStatus)) +
           row('Date Hired', emp.hireDate) + row('Regularization', emp.regularizationDate) +
           row('Employment Type', emp.employmentType) + row('Basic Salary/Rate', money(emp.basicSalary)) +
-          row('Daily Rate', money(r.daily)) + row('Status', emp.active !== false ? 'Active' : 'Inactive') +
+          row('Daily Rate', money(r.daily)) +
+          row('Leave Credits (yr)', (emp.leaveCreditsPerYear || 0) + ' — used ' + (emp.leaveCreditsUsed || 0) +
+            ', ' + Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0)) + ' left') +
+          row('Status', emp.active !== false ? 'Active' : 'Inactive') +
           '</table></div>' +
         '<div><h4>Government IDs</h4><table class="f201-tbl">' +
           row('SSS No.', emp.sssNo) + row('PhilHealth No.', emp.philhealthNo) +
@@ -742,7 +760,11 @@
       '<tr><td>Absences</td><td>' + dtr.daysAbsent + '</td><td>Late</td><td>' + dtr.lateMinutes +
       'm</td><td>Undertime</td><td>' + dtr.undertimeMinutes + 'm</td></tr>' +
       '<tr><td>SSS MSC</td><td>' + money(r.contributions.sss.msc) + '</td><td>Taxable</td><td>' + money(r.taxableBase) +
-      '</td><td>Contrib. Basis</td><td>' + money(r.contributions.basis) + '</td></tr></table></div>' +
+      '</td><td>Contrib. Basis</td><td>' + money(r.contributions.basis) + '</td></tr>' +
+      (r.leave ? '<tr><td>Status</td><td>' + esc(cap(r.employmentStatus)) +
+        '</td><td>Leave Used</td><td>' + r.leave.paid +
+        '</td><td>Leave Left</td><td>' + r.leave.remainingAfter + '</td></tr>' : '') +
+      '</table></div>' +
       '<div class="ps-sign"><div>_____________________<br>Employee Signature</div>' +
       '<div>_____________________<br>Authorized Signatory</div></div></div>';
   }
@@ -939,51 +961,68 @@
     }
     v.innerHTML =
       card('Company Information',
+        '<p class="muted">Shown on payslips, the 201 file and reports. For most users, this is the only section you need to fill in.</p>' +
         '<div class="grid2">' +
         field('Company Name', '<input data-co="name" value="' + esc(comp.name) + '">') +
         field('Address', '<input data-co="address" value="' + esc(comp.address || '') + '">') +
         field('TIN', '<input data-co="tin" value="' + esc(comp.tin || '') + '">') +
-        '</div>') +
-      card('SSS',
-        '<div class="grid3">' +
-        field('Employee Rate', num('sss.employeeRate', c.sss.employeeRate)) +
-        field('Employer Rate', num('sss.employerRate', c.sss.employerRate)) +
-        field('MSC Step', num('sss.mscStep', c.sss.mscStep)) +
-        field('MSC Minimum', num('sss.mscMin', c.sss.mscMin)) +
-        field('MSC Maximum', num('sss.mscMax', c.sss.mscMax)) +
-        field('EC Threshold (MSC)', num('sss.ecThreshold', c.sss.ecThreshold)) +
-        field('EC Low', num('sss.ecLow', c.sss.ecLow)) +
-        field('EC High', num('sss.ecHigh', c.sss.ecHigh)) +
-        '</div>') +
-      card('PhilHealth',
-        '<div class="grid3">' +
-        field('Premium Rate', num('philhealth.rate', c.philhealth.rate)) +
-        field('Employee Share', num('philhealth.employeeShare', c.philhealth.employeeShare)) +
-        field('Income Floor', num('philhealth.floor', c.philhealth.floor)) +
-        field('Income Ceiling', num('philhealth.ceiling', c.philhealth.ceiling)) +
-        '</div>') +
-      card('Pag-IBIG (HDMF)',
-        '<div class="grid3">' +
-        field('Low Bracket (≤)', num('pagibig.lowBracket', c.pagibig.lowBracket)) +
-        field('EE Rate (low)', num('pagibig.eeRateLow', c.pagibig.eeRateLow)) +
-        field('EE Rate (high)', num('pagibig.eeRateHigh', c.pagibig.eeRateHigh)) +
-        field('ER Rate', num('pagibig.erRate', c.pagibig.erRate)) +
-        field('Max Base', num('pagibig.maxBase', c.pagibig.maxBase)) +
-        '</div>') +
-      card('BIR Withholding Tax (Monthly brackets)',
-        '<p class="muted">Over / Base tax / Rate. Daily, weekly and semi-monthly tables are derived automatically.</p>' +
-        '<table class="tbl"><thead><tr><th>Compensation Over</th><th>Base Tax</th><th>Rate</th></tr></thead><tbody>' +
-        c.tax.brackets.map(function (b, i) {
-          return '<tr><td>' + num('tax.brackets.' + i + '.over', b.over) + '</td>' +
-            '<td>' + num('tax.brackets.' + i + '.base', b.base) + '</td>' +
-            '<td>' + num('tax.brackets.' + i + '.rate', b.rate) + '</td></tr>';
-        }).join('') + '</tbody></table>',
-        '<button class="btn" id="saveCfg">Save Settings</button>' +
-        '<button class="btn-sm btn-danger" id="resetCfg">Reset to 2025 Defaults</button>') +
-      '<p class="disclaimer">⚠️ These defaults reflect the schedules understood to be in force for 2025. ' +
-      'This tool is provided as-is and is not a substitute for professional advice. Verify all values against the ' +
-      'current official SSS, PhilHealth, HDMF and BIR circulars.</p>';
+        '</div>',
+        '<button class="btn" id="saveCo">Save Company Info</button>') +
+      card('Contribution Quick Check',
+        '<p class="muted">Type a monthly salary to preview the automatic government deductions using the current rates. ' +
+        'This is only a preview — it changes nothing and saves nothing.</p>' +
+        '<label class="fld" style="max-width:260px"><span class="fld-label">Monthly Salary</span>' +
+        '<input id="previewSalary" type="number" step="100" value="20000"></label>' +
+        '<div id="previewOut" class="preview-out"></div>') +
+      '<details class="advanced"><summary>⚙️ Advanced: government rate tables — most users can leave these alone</summary>' +
+        '<div class="advanced-body">' +
+        '<p class="disclaimer">These are already set to the latest Philippine government rates (2025). ' +
+        'Only change them when an official SSS, PhilHealth, Pag-IBIG (HDMF) or BIR circular updates the rates. ' +
+        'If you are unsure, leave everything as it is.</p>' +
+        card('SSS',
+          '<div class="grid3">' +
+          field('Employee Rate', num('sss.employeeRate', c.sss.employeeRate)) +
+          field('Employer Rate', num('sss.employerRate', c.sss.employerRate)) +
+          field('MSC Step', num('sss.mscStep', c.sss.mscStep)) +
+          field('MSC Minimum', num('sss.mscMin', c.sss.mscMin)) +
+          field('MSC Maximum', num('sss.mscMax', c.sss.mscMax)) +
+          field('EC Threshold (MSC)', num('sss.ecThreshold', c.sss.ecThreshold)) +
+          field('EC Low', num('sss.ecLow', c.sss.ecLow)) +
+          field('EC High', num('sss.ecHigh', c.sss.ecHigh)) +
+          '</div>') +
+        card('PhilHealth',
+          '<div class="grid3">' +
+          field('Premium Rate', num('philhealth.rate', c.philhealth.rate)) +
+          field('Employee Share', num('philhealth.employeeShare', c.philhealth.employeeShare)) +
+          field('Income Floor', num('philhealth.floor', c.philhealth.floor)) +
+          field('Income Ceiling', num('philhealth.ceiling', c.philhealth.ceiling)) +
+          '</div>') +
+        card('Pag-IBIG (HDMF)',
+          '<div class="grid3">' +
+          field('Low Bracket (≤)', num('pagibig.lowBracket', c.pagibig.lowBracket)) +
+          field('EE Rate (low)', num('pagibig.eeRateLow', c.pagibig.eeRateLow)) +
+          field('EE Rate (high)', num('pagibig.eeRateHigh', c.pagibig.eeRateHigh)) +
+          field('ER Rate', num('pagibig.erRate', c.pagibig.erRate)) +
+          field('Max Base', num('pagibig.maxBase', c.pagibig.maxBase)) +
+          '</div>') +
+        card('BIR Withholding Tax (Monthly brackets)',
+          '<p class="muted">Over / Base tax / Rate. Daily, weekly and semi-monthly tables are derived automatically.</p>' +
+          '<table class="tbl"><thead><tr><th>Compensation Over</th><th>Base Tax</th><th>Rate</th></tr></thead><tbody>' +
+          c.tax.brackets.map(function (b, i) {
+            return '<tr><td>' + num('tax.brackets.' + i + '.over', b.over) + '</td>' +
+              '<td>' + num('tax.brackets.' + i + '.base', b.base) + '</td>' +
+              '<td>' + num('tax.brackets.' + i + '.rate', b.rate) + '</td></tr>';
+          }).join('') + '</tbody></table>',
+          '<button class="btn" id="saveCfg">Save Rate Changes</button>' +
+          '<button class="btn-sm btn-danger" id="resetCfg">Reset to Default Rates</button>') +
+        '</div></details>';
 
+    v.querySelector('#saveCo').addEventListener('click', function () {
+      v.querySelectorAll('[data-co]').forEach(function (inp) { comp[inp.dataset.co] = inp.value; });
+      S.save();
+      toast('Company info saved.');
+      render();
+    });
     v.querySelector('#saveCfg').addEventListener('click', function () {
       v.querySelectorAll('[data-cfg]').forEach(function (inp) {
         var path = inp.dataset.cfg.split('.');
@@ -991,13 +1030,43 @@
         for (var i = 0; i < path.length - 1; i++) obj = obj[path[i]];
         obj[path[path.length - 1]] = parseFloat(inp.value) || 0;
       });
-      v.querySelectorAll('[data-co]').forEach(function (inp) { comp[inp.dataset.co] = inp.value; });
       S.save();
-      toast('Settings saved.');
+      toast('Rates saved.');
+      renderPreview();
     });
     v.querySelector('#resetCfg').addEventListener('click', function () {
-      if (confirm('Reset statutory tables to 2025 defaults?')) { PH.statutory.resetConfig(); S.save(); renderView(); }
+      if (confirm('Reset all government rate tables to the default (2025) values?')) {
+        PH.statutory.resetConfig(); S.save(); renderView();
+      }
     });
+
+    function renderPreview() {
+      var sal = parseFloat(v.querySelector('#previewSalary').value) || 0;
+      var sss = PH.statutory.computeSSS(sal);
+      var ph = PH.statutory.computePhilHealth(sal);
+      var pi = PH.statutory.computePagIBIG(sal);
+      var contribEE = PH.statutory.round2(sss.ee + ph.ee + pi.ee);
+      var taxable = PH.statutory.round2(Math.max(0, sal - contribEE));
+      var tax = PH.statutory.computeWithholdingTax(taxable, 'monthly');
+      var totalDed = PH.statutory.round2(contribEE + tax);
+      var net = PH.statutory.round2(sal - totalDed);
+      function r2(label, val, strong) {
+        return '<tr><td>' + label + '</td><td class="num">' + (strong ? '<b>' + money(val) + '</b>' : money(val)) + '</td></tr>';
+      }
+      v.querySelector('#previewOut').innerHTML =
+        '<table class="tbl preview-tbl"><tbody>' +
+        r2('SSS (employee share)', sss.ee) +
+        r2('PhilHealth (employee share)', ph.ee) +
+        r2('Pag-IBIG (employee share)', pi.ee) +
+        r2('Withholding tax (monthly)', tax) +
+        '</tbody><tfoot>' +
+        r2('Total deductions', totalDed, true) +
+        r2('Estimated take-home (basic only)', net, true) +
+        '</tfoot></table>' +
+        '<p class="hint">Excludes allowances, overtime, loans and leave — those are computed per employee at payroll time.</p>';
+    }
+    v.querySelector('#previewSalary').addEventListener('input', renderPreview);
+    renderPreview();
   }
 
   /* ===================== BACKUP ===================== */
@@ -1101,9 +1170,11 @@
   var SAMPLE_DTR = 'EmployeeCode,Date,TimeIn,TimeOut,Break,DayType,RestDay,ScheduledIn,Absent,PaidLeave\n' +
     'EMP-001,2026-07-01,08:00,17:00,60,regular,,08:00,,\n' +
     'EMP-001,2026-07-02,08:15,19:00,60,regular,,08:00,,\n' +
-    'EMP-001,2026-07-03,08:00,17:00,60,regular,,08:00,,\n' +
+    'EMP-001,2026-07-08,,,,regular,,,1,\n' +
+    'EMP-001,2026-07-10,08:00,17:00,60,regular_holiday,,08:00,,\n' +
+    'EMP-001,2026-07-13,,,,regular_holiday,,,,\n' +
     'EMP-002,2026-07-01,09:00,18:00,60,regular,,09:00,,\n' +
-    'EMP-002,2026-07-02,,,,regular,,,1,\n';
+    'EMP-002,2026-07-04,,,,regular,,,,1\n';
 
   var PAYSLIP_PRINT_CSS = '';
 
