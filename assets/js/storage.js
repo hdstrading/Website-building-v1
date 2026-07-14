@@ -97,20 +97,32 @@
   function seedIfEmpty() {
     if (db.employees.length) return;
     var e1 = {
-      id: uid('emp'), code: 'EMP-001', firstName: 'Juan', lastName: 'Dela Cruz',
+      id: uid('emp'), code: 'EMP-001', firstName: 'Juan', middleName: 'Reyes', lastName: 'Dela Cruz',
       position: 'Sales Associate', department: 'Sales', employmentType: 'monthly',
       basicSalary: 20000, dailyRateFactor: 313, workDaysPerWeek: 6, restDay: 0,
-      hireDate: '2023-01-15', sssNo: '34-1234567-8', philhealthNo: '12-345678901-2',
-      pagibigNo: '1234-5678-9012', tin: '123-456-789-000', contributionBasis: 'basic',
-      active: true
+      hireDate: '2023-01-15', regularizationDate: '2023-07-15',
+      birthDate: '1995-03-20', civilStatus: 'Single',
+      address: '123 Rizal St., Brgy. San Isidro, Quezon City',
+      contactNumber: '0917-123-4567', email: 'juan.delacruz@example.com',
+      sssNo: '34-1234567-8', philhealthNo: '12-345678901-2',
+      pagibigNo: '1234-5678-9012', tin: '123-456-789-000',
+      emergencyName: 'Ana Dela Cruz', emergencyRelation: 'Spouse', emergencyContact: '0918-765-4321',
+      bankName: 'BDO', bankAccountName: 'Juan R. Dela Cruz', bankAccountNumber: '0012-3456-7890',
+      contributionBasis: 'basic', active: true
     };
     var e2 = {
-      id: uid('emp'), code: 'EMP-002', firstName: 'Maria', lastName: 'Santos',
+      id: uid('emp'), code: 'EMP-002', firstName: 'Maria', middleName: 'Lopez', lastName: 'Santos',
       position: 'Accountant', department: 'Finance', employmentType: 'monthly',
       basicSalary: 35000, dailyRateFactor: 261, workDaysPerWeek: 5, restDay: 0,
-      hireDate: '2022-06-01', sssNo: '34-7654321-0', philhealthNo: '12-109876543-2',
-      pagibigNo: '9876-5432-1098', tin: '987-654-321-000', contributionBasis: 'basic',
-      active: true
+      hireDate: '2022-06-01', regularizationDate: '2022-12-01',
+      birthDate: '1990-09-12', civilStatus: 'Married',
+      address: '45 Mabini Ave., Brgy. Poblacion, Makati City',
+      contactNumber: '0920-222-3333', email: 'maria.santos@example.com',
+      sssNo: '34-7654321-0', philhealthNo: '12-109876543-2',
+      pagibigNo: '9876-5432-1098', tin: '987-654-321-000',
+      emergencyName: 'Pedro Santos', emergencyRelation: 'Spouse', emergencyContact: '0921-444-5555',
+      bankName: 'BPI', bankAccountName: 'Maria L. Santos', bankAccountNumber: '3344-5566-77',
+      contributionBasis: 'basic', active: true
     };
     db.employees.push(e1, e2);
     db.allowances.push(
@@ -120,7 +132,9 @@
     );
     db.loans.push(
       { id: uid('lon'), employeeId: e1.id, type: 'SSS Loan', principal: 12000, monthlyAmortization: 1000, balance: 8000, startDate: '2024-11-01', active: true },
-      { id: uid('lon'), employeeId: e2.id, type: 'Company Loan', principal: 30000, monthlyAmortization: 2500, balance: 20000, startDate: '2024-08-01', active: true }
+      { id: uid('lon'), employeeId: e1.id, type: 'Product Advance', reference: 'Company store — appliances', principal: 6000, monthlyAmortization: 1000, balance: 4000, startDate: '2026-05-01', active: true },
+      { id: uid('lon'), employeeId: e2.id, type: 'Company Loan', principal: 30000, monthlyAmortization: 2500, balance: 20000, startDate: '2024-08-01', active: true },
+      { id: uid('lon'), employeeId: e2.id, type: 'Cash Advance', reference: 'Payroll cash advance', principal: 5000, monthlyAmortization: 2500, balance: 5000, startDate: '2026-07-01', active: true }
     );
     var period = {
       id: uid('per'), name: 'July 2026 (1–15)', startDate: '2026-07-01', endDate: '2026-07-15',

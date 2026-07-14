@@ -161,3 +161,37 @@ input[type=file] { padding: 6px; }
   .ps-cols { flex-direction: column; }
 }
 code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+/* ---- Form sections & wide field ---- */
+.form-section { margin: 18px 0 8px; font-size: 13px; color: var(--brand); border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.form-section:first-child { margin-top: 0; }
+.fld-wide { grid-column: 1 / -1; }
+.sub { font-size: 11px; color: var(--muted); }
+
+/* ---- 201 File ---- */
+.f201-head { display: flex; justify-content: space-between; border-bottom: 2px solid var(--ink); padding-bottom: 8px; }
+.f201-co { font-size: 18px; font-weight: 800; }
+.f201-sub { font-size: 11px; color: var(--muted); }
+.f201-title { font-size: 15px; font-weight: 800; letter-spacing: 1px; color: var(--brand); }
+.f201-name { font-size: 16px; font-weight: 700; margin: 12px 0; }
+.f201-code { font-size: 12px; color: var(--muted); font-weight: 500; }
+.f201-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 24px; }
+.f201-grid h4, .f201-h { margin: 4px 0 6px; font-size: 12px; color: var(--brand); text-transform: uppercase; letter-spacing: .4px; }
+.f201-h { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+.f201-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.f201-tbl td { padding: 3px 4px; border-bottom: 1px dotted var(--line); vertical-align: top; }
+.f201-l { color: var(--muted); width: 42%; }
+.f201-list { width: 100%; border-collapse: collapse; font-size: 12px; }
+.f201-list th, .f201-list td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+.f201-list th { background: #f8fafc; color: var(--muted); font-size: 11px; }
+
+/* ---- Reports ---- */
+.rpt-tbl { font-size: 12px; }
+.rpt-tbl th, .rpt-tbl td { white-space: nowrap; }
+.rpt-sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+
+/* ---- Payslip DTR + notes ---- */
+.ps-dtr, .ps-notes { margin-top: 14px; }
+.ps-dtr h4, .ps-notes h4 { margin: 6px 0; font-size: 13px; border-bottom: 1px solid var(--line); }
+.ps-dtr-tbl th { background: #f8fafc; color: var(--muted); font-size: 11px; text-align: left; padding: 3px 4px; }
+.ps-note-free { margin-top: 8px; font-size: 12px; color: var(--muted); min-height: 20px; }

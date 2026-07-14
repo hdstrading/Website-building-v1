@@ -21,11 +21,12 @@
 
   var VIEWS = [
     ['dashboard', 'Dashboard', '📊'],
-    ['employees', 'Employees', '👥'],
+    ['employees', 'Employees (201)', '👥'],
     ['dtr', 'DTR / Time', '⏰'],
     ['earnings', 'Allowances & Commissions', '💰'],
-    ['loans', 'Loans & Advances', '🏦'],
+    ['loans', 'Loans & Deductibles', '🏦'],
     ['payroll', 'Run Payroll', '🧮'],
+    ['reports', 'Reports', '📑'],
     ['settings', 'Statutory Settings', '⚙️'],
     ['backup', 'Backup & Data', '💾']
   ];
@@ -62,6 +63,7 @@
       earnings: viewEarnings,
       loans: viewLoans,
       payroll: viewPayroll,
+      reports: viewReports,
       settings: viewSettings,
       backup: viewBackup
     })[state.view](v);
@@ -126,6 +128,7 @@
         '</td><td>' + money(e.basicSalary) + '</td><td>' + money(r.daily) +
         '</td><td>' + (e.active !== false ? '<span class="badge badge-ok">active</span>' : '<span class="badge">inactive</span>') +
         '</td><td class="row-actions">' +
+        '<button class="btn-sm" data-emp-view="' + e.id + '">201 File</button>' +
         '<button class="btn-sm" data-emp-edit="' + e.id + '">Edit</button>' +
         '<button class="btn-sm btn-danger" data-emp-del="' + e.id + '">Delete</button></td></tr>';
     }).join('') : '<tr><td colspan="8" class="muted">No employees yet. Click "Add Employee".</td></tr>';
@@ -137,6 +140,9 @@
       '<button class="btn" data-emp-add>+ Add Employee</button>');
 
     v.querySelector('[data-emp-add]').addEventListener('click', function () { employeeForm(); });
+    v.querySelectorAll('[data-emp-view]').forEach(function (b) {
+      b.addEventListener('click', function () { view201(S.find('employees', b.dataset.empView)); });
+    });
     v.querySelectorAll('[data-emp-edit]').forEach(function (b) {
       b.addEventListener('click', function () { employeeForm(S.find('employees', b.dataset.empEdit)); });
     });
@@ -149,30 +155,45 @@
 
   function employeeForm(emp) {
     emp = emp || { employmentType: 'monthly', dailyRateFactor: 313, workDaysPerWeek: 6, restDay: 0, active: true, contributionBasis: 'basic' };
-    var f = [
-      ['code', 'Employee Code', 'text'], ['firstName', 'First Name', 'text'],
-      ['lastName', 'Last Name', 'text'], ['position', 'Position', 'text'],
-      ['department', 'Department', 'text'], ['hireDate', 'Date Hired', 'date'],
-      ['sssNo', 'SSS No.', 'text'], ['philhealthNo', 'PhilHealth No.', 'text'],
-      ['pagibigNo', 'Pag-IBIG No.', 'text'], ['tin', 'TIN', 'text'],
-      ['bankAccount', 'Bank / Account', 'text']
-    ];
+    function txt(name, label, type) {
+      return field(label, '<input name="' + name + '" type="' + (type || 'text') + '" value="' + esc(emp[name] || '') + '">');
+    }
     var body =
-      '<div class="grid2">' + f.map(function (x) {
-        return field(x[1], '<input name="' + x[0] + '" type="' + x[2] + '" value="' + esc(emp[x[0]] || '') + '">');
-      }).join('') +
-      field('Employment Type',
-        select('employmentType', ['monthly', 'daily', 'hourly'], emp.employmentType)) +
-      field('Basic Salary / Rate',
-        '<input name="basicSalary" type="number" step="0.01" value="' + (emp.basicSalary || '') + '">' +
-        '<small class="hint">Monthly basic for "monthly"; daily rate for "daily"; hourly rate for "hourly".</small>') +
-      field('Working-Days Factor (per year)',
-        '<input name="dailyRateFactor" type="number" value="' + (emp.dailyRateFactor || 313) + '">' +
-        '<small class="hint">313 (6-day wk), 261 (5-day wk), or 365 (with rest-day pay).</small>') +
-      field('Work Days / Week', '<input name="workDaysPerWeek" type="number" value="' + (emp.workDaysPerWeek || 6) + '">') +
-      field('Rest Day', select('restDay', [['0','Sunday'],['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],['5','Friday'],['6','Saturday']], String(emp.restDay || 0))) +
-      field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
-      field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
+      '<h4 class="form-section">Personal Information</h4><div class="grid2">' +
+        txt('code', 'Employee Code') + txt('firstName', 'First Name') +
+        txt('middleName', 'Middle Name') + txt('lastName', 'Last Name') +
+        txt('birthDate', 'Date of Birth', 'date') +
+        field('Civil Status', select('civilStatus', ['Single', 'Married', 'Widowed', 'Separated'], emp.civilStatus || 'Single')) +
+        txt('contactNumber', 'Contact Number') + txt('email', 'Email') +
+        '<label class="fld fld-wide"><span class="fld-label">Home Address</span>' +
+        '<input name="address" value="' + esc(emp.address || '') + '"></label>' +
+      '</div>' +
+      '<h4 class="form-section">Employment</h4><div class="grid2">' +
+        txt('position', 'Position') + txt('department', 'Department') +
+        txt('hireDate', 'Date Hired', 'date') + txt('regularizationDate', 'Regularization Date', 'date') +
+        field('Employment Type', select('employmentType', ['monthly', 'daily', 'hourly'], emp.employmentType)) +
+        field('Basic Salary / Rate',
+          '<input name="basicSalary" type="number" step="0.01" value="' + (emp.basicSalary || '') + '">' +
+          '<small class="hint">Monthly basic for "monthly"; daily rate for "daily"; hourly rate for "hourly".</small>') +
+        field('Working-Days Factor (per year)',
+          '<input name="dailyRateFactor" type="number" value="' + (emp.dailyRateFactor || 313) + '">' +
+          '<small class="hint">313 (6-day wk), 261 (5-day wk), or 365 (with rest-day pay).</small>') +
+        field('Work Days / Week', '<input name="workDaysPerWeek" type="number" value="' + (emp.workDaysPerWeek || 6) + '">') +
+        field('Rest Day', select('restDay', [['0','Sunday'],['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],['5','Friday'],['6','Saturday']], String(emp.restDay || 0))) +
+        field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
+        field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
+      '</div>' +
+      '<h4 class="form-section">Government IDs</h4><div class="grid2">' +
+        txt('sssNo', 'SSS No.') + txt('philhealthNo', 'PhilHealth No.') +
+        txt('pagibigNo', 'Pag-IBIG No.') + txt('tin', 'TIN') +
+      '</div>' +
+      '<h4 class="form-section">Bank Details (for salary credit)</h4><div class="grid2">' +
+        txt('bankName', 'Bank Name') + txt('bankAccountName', 'Account Name') +
+        txt('bankAccountNumber', 'Account Number') +
+      '</div>' +
+      '<h4 class="form-section">Emergency Contact</h4><div class="grid2">' +
+        txt('emergencyName', 'Contact Name') + txt('emergencyRelation', 'Relationship') +
+        txt('emergencyContact', 'Contact Number') +
       '</div>';
     modal((emp.id ? 'Edit' : 'Add') + ' Employee', body, function (form) {
       var data = collect(form);
@@ -185,6 +206,67 @@
       if (!data.code || !data.lastName) { alert('Code and Last Name are required.'); return false; }
       S.upsert('employees', data);
       renderView();
+    }, 'wide');
+  }
+
+  /* ---- 201 File (printable employee record) ---- */
+  function view201(emp) {
+    var comp = S.db.meta.company;
+    var loans = S.list('loans').filter(function (l) { return l.employeeId === emp.id; });
+    var alw = S.list('allowances').filter(function (a) { return a.employeeId === emp.id; });
+    var r = PH.payroll.rates(emp);
+    function row(label, val) {
+      return '<tr><td class="f201-l">' + label + '</td><td>' + esc(val || '—') + '</td></tr>';
+    }
+    var loanRows = loans.length ? loans.map(function (l) {
+      return '<tr><td>' + esc(l.type) + (l.reference ? ' — ' + esc(l.reference) : '') +
+        '</td><td class="num">' + money(l.monthlyAmortization) + '</td><td class="num">' + money(l.balance) +
+        '</td><td>' + (l.active ? 'Active' : 'Closed') + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="muted">None</td></tr>';
+    var alwRows = alw.length ? alw.map(function (a) {
+      return '<tr><td>' + esc(a.name) + '</td><td>' + esc(a.type || 'allowance') +
+        '</td><td class="num">' + money(a.amount) + '</td><td>' + (a.taxable ? 'Taxable' : 'Non-taxable') + '</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="muted">None</td></tr>';
+
+    var html = '<div class="f201" id="f201print">' +
+      '<div class="f201-head"><div><div class="f201-co">' + esc(comp.name) + '</div>' +
+      '<div class="f201-sub">' + esc(comp.address || '') + '</div></div>' +
+      '<div class="f201-title">EMPLOYEE 201 FILE</div></div>' +
+      '<div class="f201-name">' + esc([emp.lastName, emp.firstName].filter(Boolean).join(', ')) +
+      (emp.middleName ? ' ' + esc(emp.middleName) : '') + ' <span class="f201-code">' + esc(emp.code) + '</span></div>' +
+      '<div class="f201-grid">' +
+        '<div><h4>Personal</h4><table class="f201-tbl">' +
+          row('Date of Birth', emp.birthDate) + row('Civil Status', emp.civilStatus) +
+          row('Contact Number', emp.contactNumber) + row('Email', emp.email) +
+          row('Home Address', emp.address) + '</table></div>' +
+        '<div><h4>Employment</h4><table class="f201-tbl">' +
+          row('Position', emp.position) + row('Department', emp.department) +
+          row('Date Hired', emp.hireDate) + row('Regularization', emp.regularizationDate) +
+          row('Employment Type', emp.employmentType) + row('Basic Salary/Rate', money(emp.basicSalary)) +
+          row('Daily Rate', money(r.daily)) + row('Status', emp.active !== false ? 'Active' : 'Inactive') +
+          '</table></div>' +
+        '<div><h4>Government IDs</h4><table class="f201-tbl">' +
+          row('SSS No.', emp.sssNo) + row('PhilHealth No.', emp.philhealthNo) +
+          row('Pag-IBIG No.', emp.pagibigNo) + row('TIN', emp.tin) + '</table></div>' +
+        '<div><h4>Bank Details (Salary Credit)</h4><table class="f201-tbl">' +
+          row('Bank', emp.bankName) + row('Account Name', emp.bankAccountName) +
+          row('Account Number', emp.bankAccountNumber) + '</table>' +
+          '<h4 style="margin-top:12px">Emergency Contact</h4><table class="f201-tbl">' +
+          row('Name', emp.emergencyName) + row('Relationship', emp.emergencyRelation) +
+          row('Contact', emp.emergencyContact) + '</table></div>' +
+      '</div>' +
+      '<h4 class="f201-h">Allowances & Recurring Earnings</h4>' +
+      '<table class="f201-list"><thead><tr><th>Name</th><th>Type</th><th class="num">Amount</th><th>Tax</th></tr></thead><tbody>' +
+      alwRows + '</tbody></table>' +
+      '<h4 class="f201-h">Loans, Advances & Deductibles</h4>' +
+      '<table class="f201-list"><thead><tr><th>Type / Reference</th><th class="num">Amortization/mo</th><th class="num">Balance</th><th>Status</th></tr></thead><tbody>' +
+      loanRows + '</tbody></table>' +
+      '</div>';
+
+    modal('201 File', html, null, 'wide',
+      '<button class="btn" id="print201">Download PDF / Print</button>');
+    qs('#print201').addEventListener('click', function () {
+      printHTML('201 File — ' + emp.code, html);
     });
   }
 
@@ -381,6 +463,7 @@
     var rows = loans.length ? loans.map(function (l) {
       var e = S.find('employees', l.employeeId);
       return '<tr><td>' + esc(e ? e.code : '?') + '</td><td>' + esc(l.type) +
+        (l.reference ? '<div class="sub">' + esc(l.reference) + '</div>' : '') +
         '</td><td>' + money(l.principal) + '</td><td>' + money(l.monthlyAmortization) +
         '</td><td>' + money(l.balance) + '</td><td>' +
         (l.active ? '<span class="badge badge-ok">active</span>' : '<span class="badge">closed</span>') +
@@ -388,9 +471,10 @@
         '<button class="btn-sm btn-danger" data-loan-del="' + l.id + '">Delete</button></td></tr>';
     }).join('') : '<tr><td colspan="7" class="muted">No loans or advances recorded.</td></tr>';
 
-    v.innerHTML = card('Loans & Cash Advances',
-      '<p class="muted">Amortizations are auto-deducted and balances decrease when a period is finalized.</p>' +
-      '<table class="tbl"><thead><tr><th>Emp</th><th>Type</th><th>Principal</th><th>Amortization/mo</th>' +
+    v.innerHTML = card('Loans, Advances & Deductibles',
+      '<p class="muted">Includes SSS/Pag-IBIG loans, company loans, <b>cash advances</b> and <b>product advances</b>. ' +
+      'Amortizations are auto-deducted and balances decrease when a period is finalized.</p>' +
+      '<table class="tbl"><thead><tr><th>Emp</th><th>Type / Reference</th><th>Total</th><th>Amortization/mo</th>' +
       '<th>Balance</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>',
       S.list('employees').length ? '<button class="btn" data-loan-add>+ Add Loan</button>' : '');
 
@@ -411,8 +495,9 @@
     var empOpts = S.list('employees').map(function (e) { return [e.id, e.code + ' — ' + e.lastName + ', ' + e.firstName]; });
     var body = '<div class="grid2">' +
       field('Employee', select('employeeId', empOpts, l.employeeId)) +
-      field('Loan Type', select('type', ['SSS Loan', 'Pag-IBIG Loan', 'Company Loan', 'Cash Advance', 'Other'], l.type)) +
-      field('Principal', '<input name="principal" type="number" step="0.01" value="' + (l.principal || '') + '">') +
+      field('Type', select('type', ['SSS Loan', 'Pag-IBIG Loan', 'Company Loan', 'Cash Advance', 'Product Advance', 'Other'], l.type)) +
+      field('Reference / Description', '<input name="reference" value="' + esc(l.reference || '') + '" placeholder="e.g. product taken, PO no.">') +
+      field('Principal / Total Amount', '<input name="principal" type="number" step="0.01" value="' + (l.principal || '') + '">') +
       field('Monthly Amortization', '<input name="monthlyAmortization" type="number" step="0.01" value="' + (l.monthlyAmortization || '') + '">') +
       field('Current Balance', '<input name="balance" type="number" step="0.01" value="' + (l.balance != null ? l.balance : l.principal || '') + '">') +
       field('Start Date', '<input name="startDate" type="date" value="' + esc(l.startDate || '') + '">') +
@@ -586,8 +671,11 @@
   }
 
   /* ===================== PAYSLIP ===================== */
-  function payslipHTML(r, period) {
+  var DAY_LABELS = (PH.dtr && PH.dtr.DAY_TYPES) || {};
+  function payslipHTML(r, period, opts) {
+    opts = opts || {};
     var comp = S.db.meta.company;
+    var emp = S.find('employees', r.employeeId) || {};
     var earn = r.earnings.map(function (e) {
       return '<tr><td>' + esc(e.name) + (e.taxable ? '' : ' <span class="tag">non-tax</span>') +
         '</td><td class="num">' + money(e.amount) + '</td></tr>';
@@ -596,18 +684,59 @@
       return '<tr><td>' + esc(d.name) + '</td><td class="num">' + money(d.amount) + '</td></tr>';
     }).join('');
     var dtr = r.dtr;
+
+    // ---- DTR daily detail table ----
+    var dtrDetail = '';
+    if (dtr.details && dtr.details.length) {
+      var drows = dtr.details.map(function (d) {
+        var dl = (DAY_LABELS[d.dayType] && DAY_LABELS[d.dayType].label) || d.dayType;
+        return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + (d.restDay ? ' (RD)' : '') +
+          '</td><td class="num">' + (d.absent ? 'ABSENT' : (d.regularMinutes / 60).toFixed(2)) +
+          '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) +
+          '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
+          '</td><td class="num">' + (d.lateMinutes || 0) +
+          '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
+      }).join('');
+      dtrDetail = '<div class="ps-dtr"><h4>Daily Time Record</h4>' +
+        '<table class="ps-tbl ps-dtr-tbl"><thead><tr><th>Date</th><th>Day Type</th>' +
+        '<th class="num">Reg h</th><th class="num">OT h</th><th class="num">ND h</th>' +
+        '<th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
+        '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
+        '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + dtr.lateMinutes + '</b></td>' +
+        '<td class="num"><b>' + dtr.undertimeMinutes + '</b></td></tr></tfoot></table></div>';
+    }
+
+    // ---- Notes: deductible balances remaining ----
+    var loans = S.list('loans').filter(function (l) { return l.employeeId === r.employeeId; });
+    var noteRows = (r.loanDeductions || []).map(function (ld) {
+      var loan = S.find('loans', ld.id) || {};
+      var ref = loan.reference ? ' (' + loan.reference + ')' : '';
+      return '<tr><td>' + esc(ld.name) + esc(ref) + '</td><td class="num">' + money(ld.amount) +
+        '</td><td class="num">' + money(loan.balance != null ? loan.balance : 0) + '</td></tr>';
+    }).join('');
+    var notesSection = '<div class="ps-notes"><h4>Notes — Deductibles &amp; Advances</h4>' +
+      (noteRows ? '<table class="ps-tbl"><thead><tr><th>Item</th><th class="num">Deducted this period</th>' +
+        '<th class="num">Remaining balance</th></tr></thead><tbody>' + noteRows + '</tbody></table>'
+        : '<p class="muted">No active loans, cash advances or product advances this period.</p>') +
+      '<div class="ps-note-free">' + (opts.note ? esc(opts.note) : '________________________________________________') + '</div></div>';
+
     return '<div class="payslip">' +
       '<div class="ps-head"><div><div class="ps-co">' + esc(comp.name) + '</div>' +
       '<div class="ps-co-sub">' + esc(comp.address || '') + (comp.tin ? ' • TIN ' + esc(comp.tin) : '') + '</div></div>' +
       '<div class="ps-title">PAYSLIP</div></div>' +
-      '<div class="ps-meta"><div><b>' + esc(r.employeeName) + '</b> (' + esc(r.employeeCode) + ')</div>' +
-      '<div>Period: ' + esc(period.name) + '</div>' +
-      '<div>Pay Date: ' + esc(period.payDate || '—') + '</div></div>' +
+      '<div class="ps-meta"><div><b>' + esc(r.employeeName) + '</b> (' + esc(r.employeeCode) + ')' +
+      (emp.position ? '<br><span class="muted">' + esc(emp.position) + (emp.department ? ' • ' + esc(emp.department) : '') + '</span>' : '') + '</div>' +
+      '<div>Period: ' + esc(period.name) + '<br>Coverage: ' + esc(period.startDate || '') + ' – ' + esc(period.endDate || '') + '</div>' +
+      '<div>Pay Date: ' + esc(period.payDate || '—') + (emp.bankName ? '<br>Credit to: ' + esc(emp.bankName) + ' ' + esc(emp.bankAccountNumber || '') : '') + '</div></div>' +
       '<div class="ps-cols"><div class="ps-col"><h4>Earnings</h4><table class="ps-tbl"><tbody>' + earn +
       '</tbody><tfoot><tr><td><b>Gross Pay</b></td><td class="num"><b>' + money(r.grossPay) + '</b></td></tr></tfoot></table></div>' +
       '<div class="ps-col"><h4>Deductions</h4><table class="ps-tbl"><tbody>' + (ded || '<tr><td class="muted">None</td><td></td></tr>') +
       '</tbody><tfoot><tr><td><b>Total Deductions</b></td><td class="num"><b>' + money(r.totalDeductions) + '</b></td></tr></tfoot></table></div></div>' +
       '<div class="ps-net">NET PAY <span>' + money(r.netPay) + '</span></div>' +
+      dtrDetail + notesSection +
       '<div class="ps-foot"><table class="ps-mini"><tr><td>Days Present</td><td>' + dtr.daysPresent +
       '</td><td>OT Hours</td><td>' + hrs(dtr.otMinutes) + '</td><td>Night Diff</td><td>' + hrs(dtr.nightDiffMinutes) + '</td></tr>' +
       '<tr><td>Absences</td><td>' + dtr.daysAbsent + '</td><td>Late</td><td>' + dtr.lateMinutes +
@@ -621,20 +750,25 @@
   function showPayslip(r, period) {
     modal('Payslip', payslipHTML(r, period),
       null, 'wide',
-      '<button class="btn" id="printSlip">Print / Save PDF</button>');
+      '<button class="btn" id="printSlip">Download PDF / Print</button>');
     qs('#printSlip').addEventListener('click', function () { printPayslips([r], period); });
   }
 
-  function printPayslips(list, period) {
+  // Generic print helper: opens a print window (use "Save as PDF" as the
+  // destination to download). Fully offline — no external libraries.
+  function printHTML(title, bodyHTML) {
     var w = window.open('', '_blank');
-    var css = document.getElementById('appStyles') ? '' : '';
-    w.document.write('<html><head><title>Payslips — ' + esc(period.name) + '</title>' +
-      '<style>' + PAYSLIP_PRINT_CSS + '</style></head><body>' +
-      list.map(function (r) { return payslipHTML(r, period); }).join('<div class="page-break"></div>') +
-      '</body></html>');
+    if (!w) { alert('Please allow pop-ups to print / download the PDF.'); return; }
+    w.document.write('<html><head><title>' + esc(title) + '</title>' +
+      '<style>' + PAYSLIP_PRINT_CSS + '</style></head><body>' + bodyHTML + '</body></html>');
     w.document.close();
     w.focus();
     setTimeout(function () { w.print(); }, 300);
+  }
+
+  function printPayslips(list, period) {
+    printHTML('Payslips — ' + period.name,
+      list.map(function (r) { return payslipHTML(r, period); }).join('<div class="page-break"></div>'));
   }
 
   function exportRunCSV(period, results) {
@@ -649,6 +783,148 @@
         r.withholdingTax, loans.toFixed(2), lu.toFixed(2), r.totalDeductions, r.netPay].join(','));
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_payroll.csv', lines.join('\n'), 'text/csv');
+  }
+
+  /* ===================== REPORTS ===================== */
+  function viewReports(v) {
+    var periods = S.list('periods');
+    if (!periods.length) {
+      v.innerHTML = card('Reports', '<p class="muted">Create a payroll period first.</p>');
+      return;
+    }
+    var pid = state.selectedPeriod || periods[0].id;
+    state.selectedPeriod = pid;
+    var period = S.find('periods', pid);
+    var results = period.status === 'finalized' && S.db.payrolls[pid]
+      ? S.db.payrolls[pid] : PH.payroll.runPeriod(period);
+    var ids = Object.keys(results);
+
+    v.innerHTML =
+      card('Select Period',
+        '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name + ' (' + p.status + ')']; }), pid) +
+        (period.status === 'finalized' ? '<span class="badge badge-ok">finalized</span>' : '<span class="badge badge-draft">preview</span>') +
+        '</div>') +
+      card('A. Accounting Report — Full Payslip Detail',
+        '<p class="muted">Every earning and deduction itemized per employee. For books, journal entries and audit.</p>' +
+        '<div class="dtr-scroll">' + accountingTable(results, ids) + '</div>',
+        '<button class="btn-sm" id="accPrint">Download PDF / Print</button>' +
+        '<button class="btn-sm" id="accCsv">Export CSV</button>') +
+      card('B. Finance Report — Salary Crediting',
+        '<p class="muted">Net pay and bank details per employee, for the bank salary-credit file.</p>' +
+        '<div class="dtr-scroll">' + financeTable(results, ids) + '</div>',
+        '<button class="btn-sm" id="finPrint">Download PDF / Print</button>' +
+        '<button class="btn-sm" id="finCsv">Export CSV</button>');
+
+    v.querySelector('[name=period]').addEventListener('change', function (e) {
+      state.selectedPeriod = e.target.value; renderView();
+    });
+    v.querySelector('#accPrint').addEventListener('click', function () {
+      printHTML('Accounting Report — ' + period.name,
+        '<h2>Accounting Report — ' + esc(period.name) + '</h2>' +
+        '<div class="rpt-sub">' + esc(S.db.meta.company.name) + ' • Coverage ' + esc(period.startDate || '') + ' to ' + esc(period.endDate || '') + '</div>' +
+        accountingTable(results, ids));
+    });
+    v.querySelector('#accCsv').addEventListener('click', function () { exportAccountingCSV(period, results); });
+    v.querySelector('#finPrint').addEventListener('click', function () {
+      printHTML('Salary Crediting — ' + period.name,
+        '<h2>Salary Crediting (Finance) — ' + esc(period.name) + '</h2>' +
+        '<div class="rpt-sub">' + esc(S.db.meta.company.name) + ' • Pay date ' + esc(period.payDate || '—') + '</div>' +
+        financeTable(results, ids));
+    });
+    v.querySelector('#finCsv').addEventListener('click', function () { exportFinanceCSV(period, results); });
+  }
+
+  // Collect the union of all earning/deduction line names, for stable columns.
+  function collectKeys(results, ids, prop) {
+    var seen = [];
+    ids.forEach(function (id) {
+      (results[id][prop] || []).forEach(function (x) { if (seen.indexOf(x.name) < 0) seen.push(x.name); });
+    });
+    return seen;
+  }
+
+  function accountingTable(results, ids) {
+    if (!ids.length) return '<p class="muted">No employees to report.</p>';
+    var earnKeys = collectKeys(results, ids, 'earnings');
+    var dedKeys = collectKeys(results, ids, 'deductions');
+    var head = '<tr><th>Code</th><th>Name</th>' +
+      earnKeys.map(function (k) { return '<th class="num">' + esc(k) + '</th>'; }).join('') +
+      '<th class="num">Gross</th>' +
+      dedKeys.map(function (k) { return '<th class="num">' + esc(k) + '</th>'; }).join('') +
+      '<th class="num">Total Ded.</th><th class="num">Net Pay</th></tr>';
+    var tot = {}; var grossT = 0, dedT = 0, netT = 0;
+    var body = ids.map(function (id) {
+      var r = results[id];
+      var em = {}, dm = {};
+      (r.earnings || []).forEach(function (e) { em[e.name] = (em[e.name] || 0) + e.amount; });
+      (r.deductions || []).forEach(function (d) { dm[d.name] = (dm[d.name] || 0) + d.amount; });
+      grossT += r.grossPay; dedT += r.totalDeductions; netT += r.netPay;
+      earnKeys.concat(dedKeys).forEach(function (k) { tot[k] = (tot[k] || 0) + ((em[k] || dm[k]) || 0); });
+      return '<tr><td>' + esc(r.employeeCode) + '</td><td>' + esc(r.employeeName) + '</td>' +
+        earnKeys.map(function (k) { return '<td class="num">' + (em[k] ? money(em[k]) : '—') + '</td>'; }).join('') +
+        '<td class="num"><b>' + money(r.grossPay) + '</b></td>' +
+        dedKeys.map(function (k) { return '<td class="num">' + (dm[k] ? money(dm[k]) : '—') + '</td>'; }).join('') +
+        '<td class="num">' + money(r.totalDeductions) + '</td><td class="num"><b>' + money(r.netPay) + '</b></td></tr>';
+    }).join('');
+    var foot = '<tr><td colspan="2"><b>TOTALS</b></td>' +
+      earnKeys.map(function (k) { return '<td class="num"><b>' + money(tot[k]) + '</b></td>'; }).join('') +
+      '<td class="num"><b>' + money(grossT) + '</b></td>' +
+      dedKeys.map(function (k) { return '<td class="num"><b>' + money(tot[k]) + '</b></td>'; }).join('') +
+      '<td class="num"><b>' + money(dedT) + '</b></td><td class="num"><b>' + money(netT) + '</b></td></tr>';
+    return '<table class="tbl rpt-tbl"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>';
+  }
+
+  function financeTable(results, ids) {
+    if (!ids.length) return '<p class="muted">No employees to report.</p>';
+    var netT = 0;
+    var body = ids.map(function (id) {
+      var r = results[id];
+      var e = S.find('employees', id) || {};
+      netT += r.netPay;
+      return '<tr><td>' + esc(r.employeeCode) + '</td><td>' + esc(r.employeeName) +
+        '</td><td>' + esc(e.bankName || '—') + '</td><td>' + esc(e.bankAccountNumber || '—') +
+        '</td><td>' + esc(e.bankAccountName || '—') + '</td><td class="num"><b>' + money(r.netPay) + '</b></td></tr>';
+    }).join('');
+    return '<table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Name</th><th>Bank</th>' +
+      '<th>Account No.</th><th>Account Name</th><th class="num">Net Pay (Credit)</th></tr></thead><tbody>' +
+      body + '</tbody><tfoot><tr><td colspan="5"><b>TOTAL TO CREDIT</b></td><td class="num"><b>' +
+      money(netT) + '</b></td></tr></tfoot></table>';
+  }
+
+  function exportAccountingCSV(period, results) {
+    var ids = Object.keys(results);
+    var earnKeys = collectKeys(results, ids, 'earnings');
+    var dedKeys = collectKeys(results, ids, 'deductions');
+    var header = ['Code', 'Name'].concat(earnKeys, ['Gross'], dedKeys, ['Total Deductions', 'Net Pay']);
+    var lines = [header.map(csvCell).join(',')];
+    ids.forEach(function (id) {
+      var r = results[id];
+      var em = {}, dm = {};
+      (r.earnings || []).forEach(function (e) { em[e.name] = (em[e.name] || 0) + e.amount; });
+      (r.deductions || []).forEach(function (d) { dm[d.name] = (dm[d.name] || 0) + d.amount; });
+      var row = [r.employeeCode, r.employeeName]
+        .concat(earnKeys.map(function (k) { return (em[k] || 0).toFixed(2); }))
+        .concat([r.grossPay.toFixed(2)])
+        .concat(dedKeys.map(function (k) { return (dm[k] || 0).toFixed(2); }))
+        .concat([r.totalDeductions.toFixed(2), r.netPay.toFixed(2)]);
+      lines.push(row.map(csvCell).join(','));
+    });
+    downloadFile(period.name.replace(/[^\w]+/g, '_') + '_accounting.csv', lines.join('\n'), 'text/csv');
+  }
+
+  function exportFinanceCSV(period, results) {
+    var lines = [['Code', 'Name', 'Bank', 'Account Number', 'Account Name', 'Net Pay'].join(',')];
+    Object.keys(results).forEach(function (id) {
+      var r = results[id]; var e = S.find('employees', id) || {};
+      lines.push([r.employeeCode, r.employeeName, e.bankName || '', e.bankAccountNumber || '',
+        e.bankAccountName || '', r.netPay.toFixed(2)].map(csvCell).join(','));
+    });
+    downloadFile(period.name.replace(/[^\w]+/g, '_') + '_salary_credit.csv', lines.join('\n'), 'text/csv');
+  }
+
+  function csvCell(v) {
+    v = String(v == null ? '' : v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
   }
 
   /* ===================== SETTINGS ===================== */

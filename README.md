@@ -16,7 +16,7 @@ deductions — then generates printable payslips.
 
 | Area | What it does |
 |------|--------------|
-| **Employees** | Master file with salary, employment type (monthly / daily / hourly), rate factor, rest day, and government IDs (SSS, PhilHealth, Pag-IBIG, TIN). |
+| **Employee 201 File** | Full record: personal details, home address, contact, employment & regularization dates, government IDs (SSS, PhilHealth, Pag-IBIG, TIN), **bank details for salary credit**, and emergency contacts. Printable / downloadable as PDF. |
 | **DTR upload** | Import a CSV time record, or enter days manually. Computes worked hours, overtime, night differential (10 PM–6 AM), tardiness and undertime. |
 | **DOLE premiums** | Applies statutory multipliers for regular OT, rest day, special non-working day, and regular holiday work (including rest-day combinations). |
 | **SSS** | Monthly Salary Credit computation with employee/employer/EC split (2025 15% schedule, editable). |
@@ -24,8 +24,9 @@ deductions — then generates printable payslips.
 | **Pag-IBIG (HDMF)** | 1%/2% employee tiers with employer counterpart and salary cap (editable). |
 | **Withholding tax** | BIR TRAIN tables — daily, weekly, semi-monthly and monthly derived automatically. |
 | **Allowances & commissions** | Recurring taxable / non-taxable (de minimis) earnings, plus one-off per-period adjustments (commissions, bonuses). |
-| **Loans & advances** | SSS, Pag-IBIG, company loans and cash advances with automatic amortization and balance tracking. |
-| **Payslips** | On-screen preview and print / save-as-PDF, individually or in batch. |
+| **Loans, advances & in-house deductibles** | SSS/Pag-IBIG/company loans, **cash advances** and **product advances** (products taken from the company store), with a reference note, automatic amortization and running balance. |
+| **Payslips** | Detailed stub with itemized earnings/deductions, **full DTR daily breakdown**, and a **notes section** listing deductible balances. On-screen preview and downloadable as PDF (individually or in batch). |
+| **Reports** | **(A) Accounting report** — every earning & deduction itemized per employee, for the books. **(B) Finance report** — net pay + bank details per employee, for salary crediting. Both printable/PDF and CSV. |
 | **Exports & backup** | Export the payroll register to CSV; back up / restore the entire database as JSON. |
 
 ---
@@ -47,7 +48,27 @@ deductions — then generates printable payslips.
 6. **Run Payroll** → review the register, open **Payslips**, add per-period
    **Adjustments** (commissions/bonuses), then **Finalize** (this saves the run
    and reduces loan balances).
-7. **Backup & Data** → export a JSON backup regularly.
+7. **Reports** → generate the Accounting and Finance (salary-crediting) reports.
+8. **Backup & Data** → export a JSON backup regularly.
+
+### Downloading PDFs (payslips, 201 file, reports)
+
+Every "Download PDF / Print" button opens a clean print view — in the print
+dialog choose **"Save as PDF"** as the destination to download the file. This
+keeps the app fully offline with no external libraries. Payslips can be printed
+one at a time or in a batch (one per page) from **Run Payroll → Print All
+Payslips**.
+
+### In-house deductibles (cash & product advances)
+
+Record these under **Loans & Deductibles**:
+- **Cash Advance** — an advance against payroll.
+- **Product Advance** — products the employee took from the company, repaid via
+  salary deduction. Use the *Reference / Description* field to note the item.
+
+Both use a total amount, a monthly amortization, and a running balance that is
+automatically deducted each period and reduced on finalize. Remaining balances
+also appear in the Notes section of the payslip.
 
 ---
 
