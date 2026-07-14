@@ -29,6 +29,7 @@
     ['payroll', 'Run Payroll', '🧮'],
     ['reports', 'Reports', '📑'],
     ['thirteenth', '13th Month Pay', '🎁'],
+    ['bir', 'BIR Forms', '📄'],
     ['settings', 'Statutory Settings', '⚙️'],
     ['backup', 'Backup & Data', '💾']
   ];
@@ -67,6 +68,7 @@
       payroll: viewPayroll,
       reports: viewReports,
       thirteenth: viewThirteenth,
+      bir: viewBIR,
       settings: viewSettings,
       backup: viewBackup
     })[state.view](v);
@@ -1328,6 +1330,208 @@
         d.released.toFixed(2), d.balance.toFixed(2), d.taxable.toFixed(2)].map(csvCell).join(','));
     });
     downloadFile('13th_month_' + year + '.csv', lines.join('\n'), 'text/csv');
+  }
+
+  /* ===================== BIR FORMS ===================== */
+  var MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+
+  function dateOf(p) {
+    var s = p.endDate || p.payDate || p.startDate;
+    var d = s ? new Date(s + 'T00:00:00') : null;
+    return d && !isNaN(d.getTime()) ? d : null;
+  }
+  function resultsFor(p) {
+    return (p.status === 'finalized' && S.db.payrolls[p.id]) ? S.db.payrolls[p.id] : PH.payroll.runPeriod(p);
+  }
+  // Sum compensation figures per employee across a set of periods.
+  function aggregateComp(periodsList) {
+    var agg = {};
+    periodsList.forEach(function (p) {
+      var res = resultsFor(p);
+      Object.keys(res).forEach(function (id) {
+        var r = res[id];
+        var a = agg[id] || (agg[id] = { gross: 0, contrib: 0, nonTax: 0, taxable: 0, tax: 0 });
+        a.gross += r.grossPay;
+        a.contrib += r.contributions.employeeTotal;
+        a.nonTax += r.nonTaxableEarnings;
+        a.taxable += r.taxableBase;
+        a.tax += r.withholdingTax;
+      });
+    });
+    Object.keys(agg).forEach(function (id) {
+      var a = agg[id];
+      Object.keys(a).forEach(function (k) { a[k] = PH.statutory.round2(a[k]); });
+    });
+    return agg;
+  }
+  function thirteenthPayFor(empId, year) {
+    var rows = thirteenthRows(year);
+    var found = rows.filter(function (r) { return r.emp.id === empId; })[0];
+    return found ? found.pay : 0;
+  }
+
+  function viewBIR(v) {
+    var thisYear = new Date().getFullYear();
+    var years = {};
+    S.list('periods').forEach(function (p) { var y = periodYear(p); if (y) years[y] = 1; });
+    years[thisYear] = 1;
+    var yearList = Object.keys(years).map(Number).sort(function (a, b) { return b - a; });
+    var year = state.birYear || yearList[0] || thisYear;
+    state.birYear = year;
+
+    var periodsY = S.list('periods').filter(function (p) { return periodYear(p) === year; });
+    var defMonth = state.birMonth != null ? state.birMonth
+      : (periodsY.length && dateOf(periodsY[periodsY.length - 1]) ? dateOf(periodsY[periodsY.length - 1]).getMonth() : new Date().getMonth());
+    state.birMonth = defMonth;
+
+    var monthPeriods = periodsY.filter(function (p) { var d = dateOf(p); return d && d.getMonth() === defMonth; });
+    var monthAgg = aggregateComp(monthPeriods);
+    var yearAgg = aggregateComp(periodsY);
+    var emps = S.list('employees').filter(function (e) { return e.active !== false; });
+
+    // ---- 1601-C (monthly) ----
+    var mt = { gross: 0, contrib: 0, nonTax: 0, taxable: 0, tax: 0 };
+    var mRows = emps.map(function (e) {
+      var a = monthAgg[e.id]; if (!a) return '';
+      mt.gross += a.gross; mt.contrib += a.contrib; mt.nonTax += a.nonTax; mt.taxable += a.taxable; mt.tax += a.tax;
+      return '<tr><td>' + esc(e.tin || '—') + '</td><td>' + esc(name(e)) +
+        '</td><td class="num">' + money(a.gross) + '</td><td class="num">' + money(a.contrib + a.nonTax) +
+        '</td><td class="num">' + money(a.taxable) + '</td><td class="num"><b>' + money(a.tax) + '</b></td></tr>';
+    }).join('');
+    var c1601 = !monthPeriods.length
+      ? '<p class="muted">No payroll for ' + MONTHS[defMonth] + ' ' + year + '. Create/finalize a period covering that month.</p>'
+      : '<div class="bir-summary">Total tax withheld to remit for <b>' + MONTHS[defMonth] + ' ' + year +
+        '</b>: <span>' + money(mt.tax) + '</span></div>' +
+        '<div class="dtr-scroll"><table class="tbl rpt-tbl"><thead><tr><th>TIN</th><th>Employee</th>' +
+        '<th class="num">Gross Comp.</th><th class="num">Non-Taxable</th><th class="num">Taxable Comp.</th>' +
+        '<th class="num">Tax Withheld</th></tr></thead><tbody>' + mRows +
+        '</tbody><tfoot><tr><td colspan="2"><b>TOTALS</b></td><td class="num"><b>' + money(mt.gross) +
+        '</b></td><td class="num"><b>' + money(mt.contrib + mt.nonTax) + '</b></td><td class="num"><b>' + money(mt.taxable) +
+        '</b></td><td class="num"><b>' + money(mt.tax) + '</b></td></tr></tfoot></table></div>';
+
+    // ---- 2316 (annual, per employee) ----
+    var yRows = emps.map(function (e) {
+      var a = yearAgg[e.id] || { gross: 0, contrib: 0, nonTax: 0, taxable: 0, tax: 0 };
+      var t13 = thirteenthPayFor(e.id, year);
+      var non13 = Math.min(t13, TAX_EXEMPT_13TH);
+      var nonTaxable = PH.statutory.round2(a.contrib + a.nonTax + non13);
+      return '<tr><td>' + esc(e.code) + '</td><td>' + esc(name(e)) +
+        '</td><td class="num">' + money(a.gross) + '</td><td class="num">' + money(nonTaxable) +
+        '</td><td class="num">' + money(a.taxable) + '</td><td class="num"><b>' + money(a.tax) +
+        '</b></td><td><button class="btn-sm" data-2316="' + e.id + '">Certificate</button></td></tr>';
+    }).join('');
+
+    v.innerHTML =
+      card('BIR Forms',
+        '<div class="inline"><label class="fld" style="max-width:150px"><span class="fld-label">Year</span>' +
+        select('birYear', yearList.map(function (y) { return [String(y), String(y)]; }), String(year)) + '</label></div>' +
+        '<p class="disclaimer">These summarise your payroll for filing support. They do <b>not</b> perform BIR year-end ' +
+        'tax annualisation/refund — have year-end adjustments reviewed by your accountant. Ensure company &amp; employee ' +
+        'TINs are filled in.</p>') +
+      card('1601-C — Monthly Remittance of Tax Withheld on Compensation',
+        '<div class="inline"><label class="fld" style="max-width:180px"><span class="fld-label">Month</span>' +
+        select('birMonth', MONTHS.map(function (m, i) { return [String(i), m]; }), String(defMonth)) + '</label></div>' +
+        c1601,
+        monthPeriods.length ? '<button class="btn-sm" id="bir1601Print">Download PDF / Print</button>' +
+          '<button class="btn-sm" id="bir1601Csv">Export CSV</button>' : '') +
+      card('2316 — Certificate of Compensation Payment / Tax Withheld (annual)',
+        '<p class="muted">One certificate per employee for ' + year + '. Non-taxable includes mandatory contributions, ' +
+        'de minimis/non-taxable allowances and 13th-month pay up to ₱90,000.</p>' +
+        (emps.length ? '<div class="dtr-scroll"><table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Employee</th>' +
+          '<th class="num">Gross Comp.</th><th class="num">Non-Taxable</th><th class="num">Taxable Comp.</th>' +
+          '<th class="num">Tax Withheld</th><th></th></tr></thead><tbody>' + yRows + '</tbody></table></div>'
+          : '<p class="muted">No active employees.</p>'),
+        emps.length ? '<button class="btn-sm" id="bir2316All">Print All Certificates</button>' : '');
+
+    v.querySelector('[name=birYear]').addEventListener('change', function (e) {
+      state.birYear = parseInt(e.target.value, 10); state.birMonth = null; renderView();
+    });
+    v.querySelector('[name=birMonth]').addEventListener('change', function (e) {
+      state.birMonth = parseInt(e.target.value, 10); renderView();
+    });
+    var p1 = v.querySelector('#bir1601Print');
+    if (p1) p1.addEventListener('click', function () {
+      printHTML('1601-C ' + MONTHS[defMonth] + ' ' + year, form1601HTML(monthAgg, defMonth, year));
+    });
+    var c1 = v.querySelector('#bir1601Csv');
+    if (c1) c1.addEventListener('click', function () { export1601CSV(monthAgg, defMonth, year); });
+    v.querySelectorAll('[data-2316]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var e = S.find('employees', b.dataset['2316']);
+        printHTML('BIR 2316 — ' + e.code + ' — ' + year, form2316HTML(yearAgg[e.id], e, year));
+      });
+    });
+    var all = v.querySelector('#bir2316All');
+    if (all) all.addEventListener('click', function () {
+      printHTML('BIR 2316 Certificates — ' + year,
+        emps.map(function (e) { return form2316HTML(yearAgg[e.id], e, year); }).join('<div class="page-break"></div>'));
+    });
+  }
+
+  function form1601HTML(agg, month, year) {
+    var comp = S.db.meta.company;
+    var t = { gross: 0, contrib: 0, nonTax: 0, taxable: 0, tax: 0 };
+    var rows = S.list('employees').filter(function (e) { return e.active !== false && agg[e.id]; }).map(function (e) {
+      var a = agg[e.id];
+      t.gross += a.gross; t.contrib += a.contrib; t.nonTax += a.nonTax; t.taxable += a.taxable; t.tax += a.tax;
+      return '<tr><td>' + esc(e.tin || '') + '</td><td>' + esc(name(e)) + '</td><td class="num">' + money(a.gross) +
+        '</td><td class="num">' + money(a.contrib + a.nonTax) + '</td><td class="num">' + money(a.taxable) +
+        '</td><td class="num">' + money(a.tax) + '</td></tr>';
+    }).join('');
+    return '<h2>BIR Form 1601-C</h2><div class="rpt-sub">Monthly Remittance Return of Income Taxes Withheld on Compensation</div>' +
+      '<table class="kv"><tr><td>Withholding Agent</td><td>' + esc(comp.name) + '</td><td>TIN</td><td>' + esc(comp.tin || '') + '</td></tr>' +
+      '<tr><td>For the Month</td><td>' + MONTHS[month] + ' ' + year + '</td><td>Address</td><td>' + esc(comp.address || '') + '</td></tr></table>' +
+      '<table class="tbl rpt-tbl"><thead><tr><th>TIN</th><th>Employee</th><th class="num">Gross Comp.</th>' +
+      '<th class="num">Non-Taxable</th><th class="num">Taxable Comp.</th><th class="num">Tax Withheld</th></tr></thead><tbody>' +
+      rows + '</tbody><tfoot><tr><td colspan="2"><b>TOTALS</b></td><td class="num"><b>' + money(t.gross) +
+      '</b></td><td class="num"><b>' + money(t.contrib + t.nonTax) + '</b></td><td class="num"><b>' + money(t.taxable) +
+      '</b></td><td class="num"><b>' + money(t.tax) + '</b></td></tr></tfoot></table>' +
+      '<div class="bir-remit">Total Amount of Tax Withheld to Remit: <b>' + money(t.tax) + '</b></div>';
+  }
+  function export1601CSV(agg, month, year) {
+    var lines = [['TIN', 'Name', 'Gross Compensation', 'Non-Taxable', 'Taxable Compensation', 'Tax Withheld'].join(',')];
+    S.list('employees').filter(function (e) { return e.active !== false && agg[e.id]; }).forEach(function (e) {
+      var a = agg[e.id];
+      lines.push([e.tin || '', name(e), a.gross.toFixed(2), (a.contrib + a.nonTax).toFixed(2),
+        a.taxable.toFixed(2), a.tax.toFixed(2)].map(csvCell).join(','));
+    });
+    downloadFile('1601C_' + MONTHS[month] + '_' + year + '.csv', lines.join('\n'), 'text/csv');
+  }
+
+  function form2316HTML(agg, emp, year) {
+    agg = agg || { gross: 0, contrib: 0, nonTax: 0, taxable: 0, tax: 0 };
+    var comp = S.db.meta.company;
+    var t13 = thirteenthPayFor(emp.id, year);
+    var non13 = Math.min(t13, TAX_EXEMPT_13TH);
+    var exc13 = PH.statutory.round2(Math.max(0, t13 - TAX_EXEMPT_13TH));
+    var nonTaxable = PH.statutory.round2(agg.contrib + agg.nonTax + non13);
+    var taxableComp = PH.statutory.round2(agg.taxable + exc13);
+    function kv(l, val) { return '<tr><td>' + l + '</td><td class="num">' + money(val) + '</td></tr>'; }
+    return '<div class="form2316">' +
+      '<div class="f2316-head"><div><b>BIR Form No. 2316</b><br><span class="muted">Certificate of Compensation Payment / Tax Withheld</span></div>' +
+      '<div class="num">For the Year<br><b>' + year + '</b></div></div>' +
+      '<table class="kv"><tr><td>Employee</td><td>' + esc(name(emp)) + '</td><td>TIN</td><td>' + esc(emp.tin || '') + '</td></tr>' +
+      '<tr><td>Address</td><td colspan="3">' + esc(emp.address || '') + '</td></tr>' +
+      '<tr><td>Employer</td><td>' + esc(comp.name) + '</td><td>TIN</td><td>' + esc(comp.tin || '') + '</td></tr>' +
+      '<tr><td>Employer Address</td><td colspan="3">' + esc(comp.address || '') + '</td></tr></table>' +
+      '<table class="tbl f2316-tbl"><tbody>' +
+      '<tr class="sec"><td colspan="2">Gross Compensation Income</td></tr>' +
+      kv('Gross compensation (regular)', agg.gross) +
+      kv('13th month pay &amp; other benefits', t13) +
+      '<tr class="sec"><td colspan="2">Less: Non-Taxable / Exempt</td></tr>' +
+      kv('SSS, PhilHealth, Pag-IBIG &amp; union dues', agg.contrib) +
+      kv('De minimis / non-taxable allowances', agg.nonTax) +
+      kv('13th month &amp; other benefits (max ₱90,000)', non13) +
+      kv('Total non-taxable / exempt', nonTaxable) +
+      '<tr class="sec"><td colspan="2">Taxable Compensation</td></tr>' +
+      kv('Taxable compensation income', taxableComp) +
+      '</tbody><tfoot>' +
+      '<tr><td><b>Total Tax Withheld</b></td><td class="num"><b>' + money(agg.tax) + '</b></td></tr></tfoot></table>' +
+      '<p class="f2316-note">This certificate reflects amounts recorded in this system for the year. It does not include ' +
+      'BIR year-end tax annualisation; final tax due/refund should be reviewed by your accountant.</p>' +
+      '<div class="ps-sign"><div>_____________________<br>Employee Signature</div>' +
+      '<div>_____________________<br>Employer / Authorized Agent</div></div></div>';
   }
 
   /* ===================== SETTINGS ===================== */
