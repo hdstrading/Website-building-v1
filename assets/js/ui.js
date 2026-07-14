@@ -187,6 +187,15 @@
         field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
         field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
       '</div>' +
+      '<h4 class="form-section">Work Schedule</h4><div class="grid2">' +
+        field('Shift Time In',
+          '<input name="schedTimeIn" value="' + esc(emp.schedTimeIn || '') + '" placeholder="08:00">' +
+          '<small class="hint">Used to detect tardiness. Leave blank to pay purely by hours worked.</small>') +
+        field('Shift Time Out',
+          '<input name="schedTimeOut" value="' + esc(emp.schedTimeOut || '') + '" placeholder="17:00">' +
+          '<small class="hint">Work beyond this counts as overtime (per your OT policy).</small>') +
+        field('Break (minutes)', '<input name="schedBreakMins" type="number" value="' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + '">') +
+      '</div>' +
       '<h4 class="form-section">Leave Credits (Service Incentive Leave)</h4><div class="grid2">' +
         field('Leave Credits / Year',
           '<input name="leaveCreditsPerYear" type="number" step="0.5" value="' + (emp.leaveCreditsPerYear != null ? emp.leaveCreditsPerYear : (emp.employmentStatus === 'regular' ? 5 : 0)) + '">' +
@@ -216,6 +225,7 @@
       data.restDay = parseInt(data.restDay, 10) || 0;
       data.leaveCreditsPerYear = parseFloat(data.leaveCreditsPerYear) || 0;
       data.leaveCreditsUsed = parseFloat(data.leaveCreditsUsed) || 0;
+      data.schedBreakMins = data.schedBreakMins !== '' ? (parseInt(data.schedBreakMins, 10) || 0) : 60;
       data.active = data.active === 'true';
       if (!data.code || !data.lastName) { alert('Code and Last Name are required.'); return false; }
       S.upsert('employees', data);
@@ -259,6 +269,7 @@
           row('Date Hired', emp.hireDate) + row('Regularization', emp.regularizationDate) +
           row('Employment Type', emp.employmentType) + row('Basic Salary/Rate', money(emp.basicSalary)) +
           row('Daily Rate', money(r.daily)) +
+          row('Work Schedule', (emp.schedTimeIn && emp.schedTimeOut) ? (emp.schedTimeIn + ' – ' + emp.schedTimeOut + ' (' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + 'm break)') : 'Not set') +
           row('Leave Credits (yr)', (emp.leaveCreditsPerYear || 0) + ' — used ' + (emp.leaveCreditsUsed || 0) +
             ', ' + Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0)) + ' left') +
           row('Status', emp.active !== false ? 'Active' : 'Inactive') +
@@ -303,8 +314,12 @@
 
     var byEmp = S.list('employees').map(function (e) {
       var days = dtr[e.id] || [];
+      var sched = (e.schedTimeIn && e.schedTimeOut)
+        ? esc(e.schedTimeIn + '–' + e.schedTimeOut)
+        : '<span class="muted">not set</span>';
       return '<tr><td>' + esc(e.code) + '</td><td>' + esc(e.lastName + ', ' + e.firstName) +
-        '</td><td>' + days.length + ' day(s)</td><td class="row-actions">' +
+        '</td><td>' + sched + '</td>' +
+        '<td>' + days.length + ' day(s)</td><td class="row-actions">' +
         '<button class="btn-sm" data-dtr-edit="' + e.id + '">Enter / Edit</button>' +
         (days.length ? '<button class="btn-sm btn-danger" data-dtr-clear="' + e.id + '">Clear</button>' : '') +
         '</td></tr>';
@@ -315,13 +330,15 @@
         '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name]; }), pid) +
         '</div>', '') +
       card('Upload DTR (CSV)',
-        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay, ScheduledIn, Absent, PaidLeave, RequiredHours</code>. ' +
+        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay, ScheduledIn, ScheduledOut, Absent, PaidLeave, RequiredHours</code>. ' +
+        'Schedule columns are optional — the employee\'s profile schedule is used when they are blank. ' +
         'Times accept <code>08:00</code>, <code>8:00 AM</code> or <code>0800</code>. See <code>samples/sample_dtr.csv</code>.</p>' +
         '<input type="file" id="dtrFile" accept=".csv,text/csv">' +
         '<button class="btn" id="dtrImportBtn">Import into Period</button>' +
         '<div id="dtrImportMsg" class="msg"></div>') +
       card('DTR Status — ' + esc(period.name),
-        '<table class="tbl"><thead><tr><th>Code</th><th>Employee</th><th>Records</th><th></th></tr></thead><tbody>' +
+        '<p class="muted">Each employee\'s <b>schedule</b> (set in their profile) is used to compute tardiness, undertime and overtime automatically from the punches.</p>' +
+        '<table class="tbl"><thead><tr><th>Code</th><th>Employee</th><th>Schedule</th><th>Records</th><th></th></tr></thead><tbody>' +
         byEmp + '</tbody></table>');
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
@@ -956,6 +973,7 @@
   function viewSettings(v) {
     var c = PH.statutory.config;
     var comp = S.db.meta.company;
+    var ot = S.db.meta.overtime || (S.db.meta.overtime = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 });
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
@@ -974,6 +992,21 @@
         '<label class="fld" style="max-width:260px"><span class="fld-label">Monthly Salary</span>' +
         '<input id="previewSalary" type="number" step="100" value="20000"></label>' +
         '<div id="previewOut" class="preview-out"></div>') +
+      card('Overtime Policy',
+        '<p class="muted">How overtime (work beyond an employee\'s shift end) is credited.</p>' +
+        '<div class="grid2">' +
+        field('Overtime enabled', select('otEnabled', [['true','Yes — credit overtime'],['false','No — never credit overtime']], String(ot.enabled !== false))) +
+        field('Minimum before OT counts (minutes)',
+          '<input id="otMin" type="number" value="' + (ot.minMinutes != null ? ot.minMinutes : 60) + '">' +
+          '<small class="hint">Overtime is only credited once this much is completed — e.g. 60 = the first hour must be finished.</small>') +
+        field('Round in blocks of (minutes)',
+          '<input id="otInc" type="number" value="' + (ot.incrementMinutes || 30) + '">' +
+          '<small class="hint">After the first hour, OT accrues in these blocks — e.g. 30 minutes.</small>') +
+        field('Grace / rounding threshold (minutes)',
+          '<input id="otGrace" type="number" value="' + (ot.graceMinutes != null ? ot.graceMinutes : 5) + '">' +
+          '<small class="hint">Within this many minutes of a block, round up. e.g. 5 → clock-out 5:58 counts as 6:00 (1 hour).</small>') +
+        '</div>',
+        '<button class="btn" id="saveOt">Save Overtime Policy</button>') +
       '<details class="advanced"><summary>⚙️ Advanced: government rate tables — most users can leave these alone</summary>' +
         '<div class="advanced-body">' +
         '<p class="disclaimer">These are already set to the latest Philippine government rates (2025). ' +
@@ -1022,6 +1055,14 @@
       S.save();
       toast('Company info saved.');
       render();
+    });
+    v.querySelector('#saveOt').addEventListener('click', function () {
+      ot.enabled = v.querySelector('[name=otEnabled]').value === 'true';
+      ot.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
+      ot.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
+      ot.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
+      S.save();
+      toast('Overtime policy saved.');
     });
     v.querySelector('#saveCfg').addEventListener('click', function () {
       v.querySelectorAll('[data-cfg]').forEach(function (inp) {

@@ -17,8 +17,10 @@ deductions — then generates printable payslips.
 | Area | What it does |
 |------|--------------|
 | **Employee 201 File** | Full record: personal details, home address, contact, employment & regularization dates, government IDs (SSS, PhilHealth, Pag-IBIG, TIN), **bank details for salary credit**, and emergency contacts. Printable / downloadable as PDF. |
+| **Work schedule** | Each employee has a shift schedule (time in / out / break). The DTR uses it to automatically detect **tardiness, undertime and overtime** from the punches — no need to key in a schedule per day. |
 | **DTR upload** | Import a CSV time record, or enter days manually. Computes worked hours, overtime, night differential (10 PM–6 AM), tardiness and undertime. |
-| **DOLE premiums** | Applies statutory multipliers for regular OT, rest day, special non-working day, and regular holiday work (including rest-day combinations). |
+| **Custom overtime policy** | Configurable OT rules: a **minimum before OT counts** (e.g. the first hour must be completed), **rounding blocks** (e.g. 30 minutes), and a **grace threshold** (e.g. within 5 minutes rounds up, so a 5:58 clock-out counts as 6:00). |
+| **DOLE premiums** | Applies statutory multipliers for regular OT, rest day, special non-working day, and regular holiday work (including rest-day combinations). Unworked **regular holidays** are paid 100%; special non-working days are "no work, no pay". |
 | **SSS** | Monthly Salary Credit computation with employee/employer/EC split (2025 15% schedule, editable). |
 | **PhilHealth** | 5% premium with income floor/ceiling, 50/50 split (editable). |
 | **Pag-IBIG (HDMF)** | 1%/2% employee tiers with employer counterpart and salary cap (editable). |
@@ -98,6 +100,13 @@ Column headers are matched case-insensitively and ignore spaces/punctuation, so
 
 - **Daily rate** = monthly basic × 12 ÷ working-days factor (313 for a 6-day
   week, 261 for 5-day, 365 with rest-day pay). **Hourly rate** = daily ÷ 8.
+- **Schedule-driven** tardiness, undertime and overtime: with a shift schedule
+  set on the employee, time-in after the start is tardiness, time-out before the
+  end is undertime, and time worked beyond the shift end is overtime.
+- **Overtime rounding** follows the company policy under **Statutory Settings →
+  Overtime Policy**: OT is credited only after the minimum (default 60 min) is
+  completed, then in blocks (default 30 min), rounding up within a grace window
+  (default 5 min — so a 5:58 clock-out is treated as 6:00 = one hour).
 - **Overtime / holiday / night differential** use the DOLE multipliers in
   `assets/js/dtr.js`.
 - **Contributions** are computed on the monthly basis and (for semi-monthly

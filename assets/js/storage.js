@@ -11,7 +11,12 @@
 
   function emptyDB() {
     return {
-      meta: { version: 1, company: { name: 'My Company', address: '', tin: '' } },
+      meta: {
+        version: 1,
+        company: { name: 'My Company', address: '', tin: '' },
+        // Company overtime policy (editable in Settings).
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 }
+      },
       employees: [],
       allowances: [],   // recurring earnings tied to an employee
       loans: [],
@@ -34,6 +39,9 @@
       db = emptyDB();
     }
     if (db.statutoryConfig) PH.statutory.setConfig(db.statutoryConfig);
+    // Migrate older saved data that predates newer settings.
+    if (!db.meta) db.meta = emptyDB().meta;
+    if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
     return db;
   }
 
@@ -109,6 +117,7 @@
       emergencyName: 'Ana Dela Cruz', emergencyRelation: 'Spouse', emergencyContact: '0918-765-4321',
       bankName: 'BDO', bankAccountName: 'Juan R. Dela Cruz', bankAccountNumber: '0012-3456-7890',
       employmentStatus: 'regular', leaveCreditsPerYear: 5, leaveCreditsUsed: 0,
+      schedTimeIn: '08:00', schedTimeOut: '17:00', schedBreakMins: 60,
       contributionBasis: 'basic', active: true
     };
     var e2 = {
@@ -124,6 +133,7 @@
       emergencyName: 'Pedro Santos', emergencyRelation: 'Spouse', emergencyContact: '0921-444-5555',
       bankName: 'BPI', bankAccountName: 'Maria L. Santos', bankAccountNumber: '3344-5566-77',
       employmentStatus: 'regular', leaveCreditsPerYear: 5, leaveCreditsUsed: 1,
+      schedTimeIn: '09:00', schedTimeOut: '18:00', schedBreakMins: 60,
       contributionBasis: 'basic', active: true
     };
     db.employees.push(e1, e2);
