@@ -24,6 +24,7 @@
       dtr: {},          // { periodId: { employeeId: [days] } }
       adjustments: {},  // { periodId: { employeeId: [{name,amount,taxable,type}] } }
       payrolls: {},     // { periodId: { employeeId: computedResult } }
+      thirteenthMonth: {}, // { year: { employeeId: { basicEarned, released } } }
       statutoryConfig: null
     };
   }
@@ -42,6 +43,7 @@
     // Migrate older saved data that predates newer settings.
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
+    if (!db.thirteenthMonth) db.thirteenthMonth = {};
     return db;
   }
 
