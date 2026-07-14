@@ -1,0 +1,14 @@
+# Gradle / build outputs
+.gradle/
+build/
+/local.properties
+/captures
+.cxx/
+
+# The web app is copied in at build time from the repo root (see copyWebApp),
+# so we don't commit a duplicate copy.
+/app/src/main/assets/
+
+# IDE
+.idea/
+*.iml

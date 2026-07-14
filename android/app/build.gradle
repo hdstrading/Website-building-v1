@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.hdstrading.phpayroll'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.hdstrading.phpayroll"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        debug {
+            // Debuggable APK — this is what CI publishes for easy sideloading.
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+/*
+ * The Android app simply bundles the offline web app. Rather than duplicating
+ * those files, this task copies the single source of truth (repo root) into the
+ * app's assets before every build, so the web app and the APK never drift.
+ */
+tasks.register('copyWebApp', Copy) {
+    description = 'Bundle the offline web app into the APK assets.'
+    from(rootProject.projectDir.parentFile) {
+        include 'index.html'
+        include 'assets/**'
+        include 'samples/**'
+    }
+    into layout.projectDirectory.dir('src/main/assets')
+}
+tasks.named('preBuild') { dependsOn 'copyWebApp' }
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.activity:activity-ktx:1.9.1'
+}
