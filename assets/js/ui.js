@@ -28,6 +28,7 @@
     ['loans', 'Loans & Deductibles', '🏦'],
     ['payroll', 'Run Payroll', '🧮'],
     ['reports', 'Reports', '📑'],
+    ['thirteenth', '13th Month Pay', '🎁'],
     ['settings', 'Statutory Settings', '⚙️'],
     ['backup', 'Backup & Data', '💾']
   ];
@@ -65,6 +66,7 @@
       loans: viewLoans,
       payroll: viewPayroll,
       reports: viewReports,
+      thirteenth: viewThirteenth,
       settings: viewSettings,
       backup: viewBackup
     })[state.view](v);
@@ -1167,6 +1169,165 @@
   function csvCell(v) {
     v = String(v == null ? '' : v);
     return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+
+  /* ===================== 13TH MONTH PAY ===================== */
+  var TAX_EXEMPT_13TH = 90000; // ₱90,000 exemption ceiling (shared w/ other benefits)
+
+  function periodYear(p) {
+    var d = p.endDate || p.payDate || p.startDate;
+    if (!d) return null;
+    var dt = new Date(d + 'T00:00:00');
+    return isNaN(dt.getTime()) ? null : dt.getFullYear();
+  }
+  // Sum finalized "Basic Pay" earned by an employee within a calendar year.
+  function basicEarnedFromHistory(empId, year) {
+    var total = 0;
+    S.list('periods').forEach(function (p) {
+      if (periodYear(p) !== year) return;
+      var run = (S.db.payrolls[p.id] || {})[empId];
+      if (!run) return;
+      (run.earnings || []).forEach(function (e) {
+        if (/^Basic Pay/.test(e.name)) total += e.amount;
+      });
+    });
+    return PH.statutory.round2(total);
+  }
+
+  function viewThirteenth(v) {
+    var thisYear = new Date().getFullYear();
+    var years = {};
+    S.list('periods').forEach(function (p) { var y = periodYear(p); if (y) years[y] = 1; });
+    years[thisYear] = 1;
+    var yearList = Object.keys(years).map(Number).sort(function (a, b) { return b - a; });
+    var year = state.thirteenthYear || yearList[0] || thisYear;
+    state.thirteenthYear = year;
+
+    var store = S.db.thirteenthMonth[year] = S.db.thirteenthMonth[year] || {};
+    var emps = S.list('employees').filter(function (e) { return e.active !== false; });
+
+    function basicFor(emp) {
+      var ov = store[emp.id];
+      if (ov && ov.basicEarned != null) return ov.basicEarned;
+      var hist = basicEarnedFromHistory(emp.id, year);
+      return hist > 0 ? hist : PH.payroll.rates(emp).monthlyBasic * 12; // full-year estimate
+    }
+    function releasedFor(emp) { var ov = store[emp.id]; return (ov && ov.released) || 0; }
+
+    var rows = emps.map(function (e) {
+      return '<tr data-emp="' + e.id + '"><td>' + esc(e.code) + '</td><td>' + esc(name(e)) +
+        '</td><td><input class="t13-basic" type="number" step="0.01" value="' + basicFor(e) + '" style="width:130px"></td>' +
+        '<td class="num t13-pay">—</td>' +
+        '<td><input class="t13-rel" type="number" step="0.01" value="' + releasedFor(e) + '" style="width:110px"></td>' +
+        '<td class="num t13-bal">—</td><td class="num t13-tax">—</td></tr>';
+    }).join('');
+
+    v.innerHTML =
+      card('13th Month Pay',
+        '<p class="muted">13th month pay = <b>total basic salary earned in the year ÷ 12</b> (excludes overtime, ' +
+        'holiday pay, night differential and allowances). Basic earned is pulled from finalized payrolls for the ' +
+        'selected year and can be edited. Amounts up to ₱90,000 (combined with other bonuses) are tax-exempt.</p>' +
+        '<div class="inline"><label class="fld" style="max-width:160px"><span class="fld-label">Year</span>' +
+        select('t13year', yearList.map(function (y) { return [String(y), String(y)]; }), String(year)) + '</label></div>' +
+        (emps.length ?
+          '<div class="dtr-scroll"><table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Name</th>' +
+          '<th>Basic Salary Earned</th><th class="num">13th Month Pay</th>' +
+          '<th>Advance Released</th><th class="num">Balance to Release</th><th class="num">Taxable (&gt;₱90k)</th>' +
+          '</tr></thead><tbody id="t13rows">' + rows + '</tbody>' +
+          '<tfoot><tr><td colspan="3"><b>TOTALS</b></td><td class="num"><b id="t13totPay">—</b></td>' +
+          '<td></td><td class="num"><b id="t13totBal">—</b></td><td class="num"><b id="t13totTax">—</b></td></tr></tfoot>' +
+          '</table></div>'
+          : '<p class="muted">No active employees.</p>'),
+        (emps.length ?
+          '<button class="btn" id="t13save">Save</button>' +
+          '<button class="btn-sm" id="t13print">Download PDF / Print</button>' +
+          '<button class="btn-sm" id="t13csv">Export CSV</button>' : ''));
+
+    v.querySelector('[name=t13year]').addEventListener('change', function (e) {
+      state.thirteenthYear = parseInt(e.target.value, 10); renderView();
+    });
+    if (!emps.length) return;
+
+    function recompute() {
+      var totPay = 0, totBal = 0, totTax = 0;
+      v.querySelectorAll('#t13rows tr').forEach(function (tr) {
+        var basic = parseFloat(tr.querySelector('.t13-basic').value) || 0;
+        var released = parseFloat(tr.querySelector('.t13-rel').value) || 0;
+        var pay = PH.statutory.round2(basic / 12);
+        var bal = PH.statutory.round2(pay - released);
+        var tax = PH.statutory.round2(Math.max(0, pay - TAX_EXEMPT_13TH));
+        tr.querySelector('.t13-pay').textContent = money(pay);
+        tr.querySelector('.t13-bal').textContent = money(bal);
+        tr.querySelector('.t13-tax').textContent = money(tax);
+        totPay += pay; totBal += bal; totTax += tax;
+      });
+      v.querySelector('#t13totPay').textContent = money(totPay);
+      v.querySelector('#t13totBal').textContent = money(totBal);
+      v.querySelector('#t13totTax').textContent = money(totTax);
+    }
+    v.querySelectorAll('#t13rows input').forEach(function (inp) {
+      inp.addEventListener('input', recompute);
+    });
+    recompute();
+
+    v.querySelector('#t13save').addEventListener('click', function () {
+      v.querySelectorAll('#t13rows tr').forEach(function (tr) {
+        var id = tr.dataset.emp;
+        store[id] = {
+          basicEarned: parseFloat(tr.querySelector('.t13-basic').value) || 0,
+          released: parseFloat(tr.querySelector('.t13-rel').value) || 0
+        };
+      });
+      S.save();
+      toast('13th month figures saved for ' + year + '.');
+    });
+    v.querySelector('#t13print').addEventListener('click', function () {
+      printHTML('13th Month Pay ' + year, thirteenthPrintHTML(year));
+    });
+    v.querySelector('#t13csv').addEventListener('click', function () { exportThirteenthCSV(year); });
+  }
+
+  function thirteenthRows(year) {
+    var store = S.db.thirteenthMonth[year] || {};
+    return S.list('employees').filter(function (e) { return e.active !== false; }).map(function (e) {
+      var ov = store[e.id];
+      var basic = ov && ov.basicEarned != null ? ov.basicEarned
+        : (basicEarnedFromHistory(e.id, year) || PH.payroll.rates(e).monthlyBasic * 12);
+      var released = (ov && ov.released) || 0;
+      var pay = PH.statutory.round2(basic / 12);
+      return { emp: e, basic: basic, released: released, pay: pay,
+        balance: PH.statutory.round2(pay - released),
+        taxable: PH.statutory.round2(Math.max(0, pay - TAX_EXEMPT_13TH)) };
+    });
+  }
+  function thirteenthPrintHTML(year) {
+    var data = thirteenthRows(year);
+    var tp = 0, tb = 0, tt = 0;
+    var body = data.map(function (d) {
+      tp += d.pay; tb += d.balance; tt += d.taxable;
+      return '<tr><td>' + esc(d.emp.code) + '</td><td>' + esc(name(d.emp)) +
+        '</td><td class="num">' + money(d.basic) + '</td><td class="num">' + money(d.pay) +
+        '</td><td class="num">' + money(d.released) + '</td><td class="num">' + money(d.balance) +
+        '</td><td class="num">' + money(d.taxable) + '</td></tr>';
+    }).join('');
+    return '<h2>13th Month Pay — ' + year + '</h2>' +
+      '<div class="rpt-sub">' + esc(S.db.meta.company.name) + '</div>' +
+      '<table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Name</th><th class="num">Basic Earned</th>' +
+      '<th class="num">13th Month</th><th class="num">Advance</th><th class="num">Balance</th><th class="num">Taxable</th></tr></thead>' +
+      '<tbody>' + body + '</tbody><tfoot><tr><td colspan="3"><b>TOTALS</b></td>' +
+      '<td class="num"><b>' + money(tp) + '</b></td><td></td><td class="num"><b>' + money(tb) +
+      '</b></td><td class="num"><b>' + money(tt) + '</b></td></tr></tfoot></table>' +
+      '<p style="font-size:11px;color:#555">13th month pay = total basic salary earned ÷ 12. Tax-exempt up to ₱90,000 ' +
+      '(shared with other bonuses/benefits); the excess is taxable.</p>';
+  }
+  function exportThirteenthCSV(year) {
+    var data = thirteenthRows(year);
+    var lines = [['Code', 'Name', 'Basic Salary Earned', '13th Month Pay', 'Advance Released', 'Balance to Release', 'Taxable Portion'].join(',')];
+    data.forEach(function (d) {
+      lines.push([d.emp.code, name(d.emp), d.basic.toFixed(2), d.pay.toFixed(2),
+        d.released.toFixed(2), d.balance.toFixed(2), d.taxable.toFixed(2)].map(csvCell).join(','));
+    });
+    downloadFile('13th_month_' + year + '.csv', lines.join('\n'), 'text/csv');
   }
 
   /* ===================== SETTINGS ===================== */

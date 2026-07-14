@@ -29,7 +29,8 @@ deductions — then generates printable payslips.
 | **Allowances & commissions** | Recurring taxable / non-taxable (de minimis) earnings, plus one-off per-period adjustments (commissions, bonuses). |
 | **Loans, advances & in-house deductibles** | SSS/Pag-IBIG/company loans, **cash advances** and **product advances** (products taken from the company store), with a reference note, automatic amortization and running balance. |
 | **Payslips** | Detailed stub with itemized earnings/deductions, **full DTR daily breakdown**, and a **notes section** listing deductible balances. On-screen preview and downloadable as PDF (individually or in batch). |
-| **Reports** | **(A) Accounting report** — every earning & deduction itemized per employee, for the books. **(B) Finance report** — net pay + bank details per employee, for salary crediting. Both printable/PDF and CSV. |
+| **Reports** | **(A) Accounting report** — every earning & deduction itemized per employee. **(B) Finance report** — net pay + bank details for salary crediting. **(C–E) Government remittance** — SSS R-3, PhilHealth RF-1, Pag-IBIG MCRF monthly contribution lists. All printable/PDF and CSV. |
+| **13th month pay** | Per-year computation = basic salary earned ÷ 12, pulled from finalized payrolls (editable), with mid-year **advance/balance** tracking and the **₱90,000 tax-exempt** ceiling flagged. Printable/PDF and CSV. |
 | **Exports & backup** | Export the payroll register to CSV; back up / restore the entire database as JSON. |
 
 ---
