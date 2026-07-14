@@ -62,18 +62,40 @@
     return total;
   }
 
+  /* Apply the company overtime policy to a raw OT minute count.
+   * Rules (all configurable):
+   *  - Round to `incrementMinutes` blocks (default 30). If within `graceMinutes`
+   *    (default 5) of completing the next block, round up; otherwise floor.
+   *    e.g. 58 min -> 60 (within 5 of 60); 40 min -> 30.
+   *  - OT is only credited once the first block of `minMinutes` (default 60,
+   *    "the first hour") is completed. Below that, OT = 0.
+   */
+  function applyOtRules(otRaw, rules) {
+    rules = rules || {};
+    if (rules.enabled === false) return 0;
+    if (!(otRaw > 0)) return 0;
+    var inc = rules.incrementMinutes > 0 ? rules.incrementMinutes : 30;
+    var grace = rules.graceMinutes != null ? rules.graceMinutes : 5;
+    var minM = rules.minMinutes != null ? rules.minMinutes : 60;
+    var blocks = Math.floor(otRaw / inc);
+    var rem = otRaw - blocks * inc;
+    if (rem >= inc - grace) blocks += 1;   // within grace of the next block
+    var rounded = blocks * inc;
+    return rounded < minM ? 0 : rounded;
+  }
+
   /* Compute one day's figures.
    * day = { date, dayType, restDay, timeIn, timeOut, breakMins, requiredMinutes,
-   *         absent, leavePaid }
+   *         scheduledIn, scheduledOut, absent, leavePaid }
+   * opts = { defaultBreak, schedIn, schedOut, ot } — employee schedule + OT policy.
    */
   function computeDay(day, opts) {
     opts = opts || {};
-    var required = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
     var result = {
       date: day.date,
       dayType: day.dayType || 'regular',
       restDay: !!day.restDay,
-      workedMinutes: 0, regularMinutes: 0, otMinutes: 0,
+      workedMinutes: 0, regularMinutes: 0, otMinutes: 0, otRawMinutes: 0,
       nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0,
       absent: !!day.absent, paidLeave: !!day.leavePaid
     };
@@ -95,23 +117,41 @@
       // No punches but flagged paid leave / holiday-with-pay handled by payroll
       return result;
     }
+    var brk = day.breakMins != null ? day.breakMins : (opts.defaultBreak != null ? opts.defaultBreak : 60);
     var span = outM - inM;
     if (span <= 0) span += 24 * 60; // crossed midnight
-    var brk = day.breakMins != null ? day.breakMins : (opts.defaultBreak || 60);
     var worked = Math.max(0, span - brk);
-
     result.workedMinutes = worked;
-    result.regularMinutes = Math.min(worked, required);
-    result.otMinutes = Math.max(0, worked - required);
 
-    // Tardiness: time-in later than scheduled start
-    if (day.scheduledIn != null) {
-      var schedIn = toMinutes(day.scheduledIn);
-      if (schedIn != null && inM > schedIn) result.lateMinutes = inM - schedIn;
-    }
-    // Undertime: worked less than required (only on a working day)
-    if (worked < required && dt === 'regular') {
-      result.undertimeMinutes = required - worked;
+    // Employee schedule (a per-day value overrides; blank falls back to default).
+    var hasVal = function (x) { return x != null && String(x).trim() !== ''; };
+    var schedIn = toMinutes(hasVal(day.scheduledIn) ? day.scheduledIn : opts.schedIn);
+    var schedOut = toMinutes(hasVal(day.scheduledOut) ? day.scheduledOut : opts.schedOut);
+
+    if (schedIn != null && schedOut != null) {
+      // ----- Schedule-based (identifies late / undertime / OT) -----
+      var schedSpan = schedOut - schedIn;
+      if (schedSpan <= 0) schedSpan += 24 * 60;
+      var required = day.requiredMinutes != null ? day.requiredMinutes : Math.max(0, schedSpan - brk);
+      // Normalise the out time relative to the shift start for overnight shifts.
+      var schedOutN = schedOut < schedIn ? schedOut + 24 * 60 : schedOut;
+      var outN = outM;
+      if (outN < schedIn) outN += 24 * 60;
+      result.lateMinutes = Math.max(0, inM - schedIn);
+      result.undertimeMinutes = Math.max(0, schedOutN - outN);
+      // Full scheduled day is "regular"; late & undertime are deducted separately
+      // in peso terms, so paid regular time nets to what was actually rendered.
+      result.regularMinutes = required;
+      var otRaw = Math.max(0, outN - schedOutN);
+      result.otRawMinutes = otRaw;
+      result.otMinutes = applyOtRules(otRaw, opts.ot);
+    } else {
+      // ----- Fallback (no schedule set): pay by hours worked beyond 8 -----
+      var required2 = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
+      result.regularMinutes = Math.min(worked, required2);
+      result.otRawMinutes = Math.max(0, worked - required2);
+      result.otMinutes = applyOtRules(result.otRawMinutes, opts.ot);
+      if (worked < required2 && dt === 'regular') result.undertimeMinutes = required2 - worked;
     }
 
     result.nightDiffMinutes = nightMinutes(inM, outM);
@@ -225,6 +265,7 @@
     var iType = idx('daytype', 'type', 'holiday');
     var iRest = idx('restday', 'rest');
     var iSched = idx('scheduledin', 'schedin', 'shiftstart');
+    var iSchedOut = idx('scheduledout', 'schedout', 'shiftend');
     var iAbsent = idx('absent');
     var iLeave = idx('paidleave', 'leave');
     var iReq = idx('requiredhours', 'requiredhrs', 'reqhours');
@@ -242,6 +283,7 @@
         dayType: normaliseType(iType >= 0 ? row[iType].trim() : ''),
         restDay: iRest >= 0 ? truthy(row[iRest]) : false,
         scheduledIn: iSched >= 0 ? row[iSched].trim() : undefined,
+        scheduledOut: iSchedOut >= 0 ? row[iSchedOut].trim() : undefined,
         absent: iAbsent >= 0 ? truthy(row[iAbsent]) : false,
         leavePaid: iLeave >= 0 ? truthy(row[iLeave]) : false,
         requiredMinutes: iReq >= 0 && row[iReq].trim() !== '' ? Math.round(parseFloat(row[iReq]) * 60) : undefined
@@ -272,6 +314,7 @@
     NIGHT_DIFF_RATE: NIGHT_DIFF_RATE,
     toMinutes: toMinutes,
     nightMinutes: nightMinutes,
+    applyOtRules: applyOtRules,
     computeDay: computeDay,
     computeDayPay: computeDayPay,
     computeDTR: computeDTR,

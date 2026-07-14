@@ -52,7 +52,12 @@
     var dtr = null;
     var basicPay;
     if (ctx.dtrDays && ctx.dtrDays.length) {
-      dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, { defaultBreak: 60 });
+      dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, {
+        defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
+        schedIn: emp.schedTimeIn || null,
+        schedOut: emp.schedTimeOut || null,
+        ot: (PH.storage.db.meta && PH.storage.db.meta.overtime) || null
+      });
       // Base pay from actual worked regular hours; OT & ND added separately.
       basicPay = dtr.regularPay;
     } else {
