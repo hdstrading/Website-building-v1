@@ -39,6 +39,15 @@
     '.f201-list th,.f201-list td{padding:5px 6px;border-bottom:1px solid #ddd;text-align:left;}.f201-list th{background:#f6f6f6;font-size:11px;color:#555;}' +
     // reports
     'h2{font-size:16px;margin:0 0 4px;}.rpt-sub{font-size:12px;color:#555;margin-bottom:10px;}' +
+    // BIR forms
+    '.bir-remit{background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 12px;margin-top:10px;font-size:13px;}' +
+    '.kv{border-collapse:collapse;font-size:11px;margin:8px 0 12px;width:100%;}.kv td{border:1px solid #ccc;padding:4px 8px;}' +
+    '.kv td:nth-child(odd){background:#f6f6f6;font-weight:bold;width:18%;}' +
+    '.form2316{border:1px solid #333;padding:16px;max-width:720px;}' +
+    '.f2316-head{display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:8px;}' +
+    '.f2316-tbl{width:100%;font-size:11px;border-collapse:collapse;}.f2316-tbl td{padding:4px 8px;border-bottom:1px dotted #ddd;}' +
+    '.f2316-tbl tr.sec td{background:#eee;font-weight:bold;}.f2316-tbl tfoot td{border-top:2px solid #111;background:#f6f6f6;}' +
+    '.f2316-note{font-size:10px;color:#555;margin-top:10px;}.ps-sign{display:flex;justify-content:space-between;margin-top:24px;font-size:11px;text-align:center;}' +
     '.tbl,.rpt-tbl{width:100%;border-collapse:collapse;font-size:11px;}' +
     '.tbl th,.tbl td,.rpt-tbl th,.rpt-tbl td{border:1px solid #ccc;padding:4px 6px;text-align:left;white-space:nowrap;}' +
     '.tbl th,.rpt-tbl th{background:#f6f6f6;}.tbl tfoot td,.rpt-tbl tfoot td{background:#f0f0f0;}' +

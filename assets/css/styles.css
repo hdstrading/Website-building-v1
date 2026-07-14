@@ -215,6 +215,20 @@ code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 12p
 .advanced-body { padding: 0 14px 14px; border-top: 1px solid var(--line); }
 .advanced-body .card { box-shadow: none; }
 
+/* ---- BIR forms ---- */
+.bir-summary, .bir-remit { background: #ecfeff; border: 1px solid #a5f3fc; border-radius: 8px; padding: 10px 14px; margin: 10px 0; font-size: 14px; }
+.bir-summary span { font-weight: 700; color: var(--brand); font-size: 16px; margin-left: 6px; }
+.kv { border-collapse: collapse; font-size: 12px; margin: 8px 0 14px; width: 100%; }
+.kv td { border: 1px solid var(--line); padding: 5px 8px; }
+.kv td:nth-child(odd) { background: #f8fafc; color: var(--muted); font-weight: 600; width: 18%; }
+.form2316 { border: 1px solid var(--line); border-radius: 8px; padding: 18px; background: #fff; max-width: 720px; }
+.f2316-head { display: flex; justify-content: space-between; border-bottom: 2px solid var(--ink); padding-bottom: 8px; }
+.f2316-tbl { width: 100%; font-size: 12px; }
+.f2316-tbl td { padding: 4px 8px; border-bottom: 1px dotted var(--line); }
+.f2316-tbl tr.sec td { background: #f1f5f9; font-weight: 700; color: var(--ink); border-bottom: 1px solid var(--line); }
+.f2316-tbl tfoot td { border-top: 2px solid var(--ink); background: #ecfeff; }
+.f2316-note { font-size: 11px; color: var(--muted); margin-top: 10px; }
+
 /* ---- Payslip DTR + notes ---- */
 .ps-dtr, .ps-notes { margin-top: 14px; }
 .ps-dtr h4, .ps-notes h4 { margin: 6px 0; font-size: 13px; border-bottom: 1px solid var(--line); }

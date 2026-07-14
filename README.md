@@ -31,6 +31,7 @@ deductions — then generates printable payslips.
 | **Payslips** | Detailed stub with itemized earnings/deductions, **full DTR daily breakdown**, and a **notes section** listing deductible balances. On-screen preview and downloadable as PDF (individually or in batch). |
 | **Reports** | **(A) Accounting report** — every earning & deduction itemized per employee. **(B) Finance report** — net pay + bank details for salary crediting. **(C–E) Government remittance** — SSS R-3, PhilHealth RF-1, Pag-IBIG MCRF monthly contribution lists. All printable/PDF and CSV. |
 | **13th month pay** | Per-year computation = basic salary earned ÷ 12, pulled from finalized payrolls (editable), with mid-year **advance/balance** tracking and the **₱90,000 tax-exempt** ceiling flagged. Printable/PDF and CSV. |
+| **BIR forms** | **1601-C** — monthly withholding-tax remittance summary (per-employee alphalist + total tax to remit). **2316** — annual per-employee Certificate of Compensation Payment / Tax Withheld (printable certificate, with 13th-month & contributions in the non-taxable breakdown). PDF and CSV. |
 | **Exports & backup** | Export the payroll register to CSV; back up / restore the entire database as JSON. |
 
 ---
