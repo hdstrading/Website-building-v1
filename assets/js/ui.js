@@ -330,7 +330,8 @@
         '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name]; }), pid) +
         '</div>', '') +
       card('Upload DTR (CSV)',
-        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay, ScheduledIn, ScheduledOut, Absent, PaidLeave, RequiredHours</code>. ' +
+        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay, ScheduledIn, ScheduledOut, Absent, LeaveType, RequiredHours</code>. ' +
+        '<code>LeaveType</code> accepts <code>SL</code>, <code>VL</code> or <code>EL</code> (approved paid leave). ' +
         'Schedule columns are optional — the employee\'s profile schedule is used when they are blank. ' +
         'Times accept <code>08:00</code>, <code>8:00 AM</code> or <code>0800</code>. See <code>samples/sample_dtr.csv</code>.</p>' +
         '<input type="file" id="dtrFile" accept=".csv,text/csv">' +
@@ -384,37 +385,53 @@
 
   function dtrForm(pid, empId) {
     var emp = S.find('employees', empId);
+    var period = S.find('periods', pid);
     var days = ((S.db.dtr[pid] || {})[empId] || []).slice();
     function rowHtml(d, i) {
       d = d || {};
       return '<tr data-i="' + i + '">' +
-        '<td><input name="date" type="date" value="' + esc(d.date || '') + '"></td>' +
-        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '" placeholder="08:00"></td>' +
-        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '" placeholder="17:00"></td>' +
-        '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : 60) + '" style="width:60px"></td>' +
-        '<td>' + select('dayType', [['regular','Regular'],['special','Special'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
+        '<td><input name="date" type="date" value="' + esc(d.date || '') + '">' +
+        (d.date ? '<div class="sub">' + weekdayName(d.date) + '</div>' : '') + '</td>' +
+        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '"></td>' +
+        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '"></td>' +
+        '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : (emp.schedBreakMins != null ? emp.schedBreakMins : 60)) + '" style="width:56px"></td>' +
+        '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
         '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
         '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
+        '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL']], d.leaveType || '') + '</td>' +
         '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
+    }
+    // Auto-populate a row for every date in the coverage when nothing exists yet.
+    if (!days.length && period && period.startDate && period.endDate) {
+      days = coverageDays(period, emp);
     }
     if (!days.length) days.push({});
     var body =
+      '<p class="muted">Dates below are auto-filled from the period coverage' +
+      (period && period.startDate ? ' (' + esc(period.startDate) + ' to ' + esc(period.endDate) + ')' : '') +
+      '. Just enter <b>In/Out</b> times, or tick <b>Rest</b> / <b>Absent</b>, or pick a <b>Leave</b> type (SL / VL / EL). ' +
+      'Rest days are pre-ticked from the employee\'s rest day.</p>' +
       '<div class="dtr-scroll"><table class="tbl dtr-tbl"><thead><tr><th>Date</th><th>In</th><th>Out</th>' +
-      '<th>Break</th><th>Day Type</th><th>Rest</th><th>Absent</th><th></th></tr></thead>' +
+      '<th>Break</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr></thead>' +
       '<tbody id="dtrRows">' + days.map(rowHtml).join('') + '</tbody></table></div>' +
-      '<button class="btn-sm" id="dtrAddRow" type="button">+ Add Day</button>';
+      '<button class="btn-sm" id="dtrAddRow" type="button">+ Add Day</button>' +
+      '<button class="btn-sm" id="dtrFillDates" type="button">↻ Re-fill coverage dates</button>';
     modal('DTR — ' + esc(emp.lastName + ', ' + emp.firstName), body, function (form) {
       var out = [];
       form.querySelectorAll('#dtrRows tr').forEach(function (tr) {
         var g = function (n) { var el = tr.querySelector('[name=' + n + ']'); return el; };
         var date = g('date').value;
         var tin = g('timeIn').value, tout = g('timeOut').value;
-        if (!date && !tin && !tout) return;
+        var leaveType = g('leaveType').value;
+        var restDay = g('restDay').checked, absent = g('absent').checked;
+        // Skip completely empty rows (no date, no punches, no flags).
+        if (!date && !tin && !tout && !leaveType && !restDay && !absent) return;
         out.push({
           date: date, timeIn: tin, timeOut: tout,
           breakMins: parseInt(g('breakMins').value, 10) || 0,
           dayType: g('dayType').value,
-          restDay: g('restDay').checked, absent: g('absent').checked
+          restDay: restDay, absent: absent,
+          leaveType: leaveType, leavePaid: !!leaveType
         });
       });
       S.db.dtr[pid] = S.db.dtr[pid] || {};
@@ -430,12 +447,42 @@
       rowsEl.appendChild(tmp.firstChild);
       bindRowDel();
     });
+    qs('#dtrFillDates').addEventListener('click', function () {
+      if (!period || !period.startDate || !period.endDate) { alert('Set the period start and end dates first.'); return; }
+      if (rowsEl.querySelector('input[name=timeIn]') &&
+          !confirm('Replace the current rows with a fresh set of coverage dates? Any entries here will be cleared.')) return;
+      var fresh = coverageDays(period, emp);
+      counter = fresh.length;
+      rowsEl.innerHTML = fresh.map(rowHtml).join('');
+      bindRowDel();
+    });
     function bindRowDel() {
       rowsEl.querySelectorAll('[data-row-del]').forEach(function (b) {
         b.onclick = function () { b.closest('tr').remove(); };
       });
     }
     bindRowDel();
+  }
+
+  // Build one blank DTR row per calendar date in the period, pre-marking the
+  // employee's weekly rest day.
+  function coverageDays(period, emp) {
+    var out = [];
+    var start = new Date(period.startDate + 'T00:00:00');
+    var end = new Date(period.endDate + 'T00:00:00');
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return out;
+    var restDow = emp && emp.restDay != null ? parseInt(emp.restDay, 10) : -1;
+    var guard = 0;
+    for (var dt = new Date(start); dt <= end && guard < 400; dt.setDate(dt.getDate() + 1), guard++) {
+      var iso = dt.getFullYear() + '-' + pad2(dt.getMonth() + 1) + '-' + pad2(dt.getDate());
+      out.push({ date: iso, dayType: 'regular', restDay: dt.getDay() === restDow });
+    }
+    return out;
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function weekdayName(iso) {
+    var d = new Date(iso + 'T00:00:00');
+    return isNaN(d.getTime()) ? '' : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
   }
 
   /* ===================== EARNINGS (allowances/commissions) ===================== */
@@ -643,22 +690,43 @@
   }
 
   function periodForm(p) {
-    p = p || { frequency: 'semi-monthly', applyContributions: true, status: 'draft' };
+    p = periodDefaults(p);
+    function chk(name, label, checked) {
+      return '<label class="chk"><input type="checkbox" name="' + name + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+    }
     var body = '<div class="grid2">' +
       field('Period Name', '<input name="name" value="' + esc(p.name || '') + '" placeholder="e.g. July 2026 (1-15)">') +
       field('Frequency', select('frequency', ['semi-monthly', 'monthly', 'weekly', 'daily'], p.frequency)) +
       field('Start Date', '<input name="startDate" type="date" value="' + esc(p.startDate || '') + '">') +
       field('End Date', '<input name="endDate" type="date" value="' + esc(p.endDate || '') + '">') +
       field('Pay Date', '<input name="payDate" type="date" value="' + esc(p.payDate || '') + '">') +
-      field('Deduct Contributions?', select('applyContributions', [['true','Yes (deduct SSS/PhilHealth/Pag-IBIG)'],['false','No (skip this period)']], String(p.applyContributions !== false))) +
-      '</div><p class="hint">Tip: for semi-monthly, deduct full monthly contributions on one cut-off (e.g. end of month) and set "No" on the other.</p>';
+      '</div>' +
+      '<h4 class="form-section">Statutory Deductions this cut-off</h4>' +
+      '<p class="hint">Tick which government contributions to deduct in THIS period. ' +
+      'For semi-monthly you can, for example, deduct <b>SSS on the 15th</b> and <b>PhilHealth &amp; Pag-IBIG on the 30th</b>.</p>' +
+      '<div class="chk-row">' +
+        chk('applySSS', 'SSS', p.applySSS) +
+        chk('applyPhilHealth', 'PhilHealth', p.applyPhilHealth) +
+        chk('applyPagIBIG', 'Pag-IBIG', p.applyPagIBIG) +
+      '</div>';
     modal((p.id ? 'Edit' : 'New') + ' Payroll Period', body, function (form) {
       var d = collect(form); d.id = p.id; d.status = p.status || 'draft';
-      d.applyContributions = d.applyContributions === 'true';
+      d.applySSS = !!d.applySSS; d.applyPhilHealth = !!d.applyPhilHealth; d.applyPagIBIG = !!d.applyPagIBIG;
+      delete d.applyContributions;
       if (!d.name) { alert('Period name required.'); return false; }
       var saved = S.upsert('periods', d);
       state.selectedPeriod = saved.id; renderView();
     });
+  }
+
+  // Normalise a period's contribution flags (migrates the old single flag).
+  function periodDefaults(p) {
+    if (!p) return { frequency: 'semi-monthly', status: 'draft', applySSS: true, applyPhilHealth: true, applyPagIBIG: true };
+    if (p.applySSS === undefined && p.applyPhilHealth === undefined && p.applyPagIBIG === undefined) {
+      var on = p.applyContributions !== false;
+      p.applySSS = on; p.applyPhilHealth = on; p.applyPagIBIG = on;
+    }
+    return p;
   }
 
   function adjustmentForm(pid, empId) {
@@ -725,8 +793,13 @@
     if (dtr.details && dtr.details.length) {
       var drows = dtr.details.map(function (d) {
         var dl = (DAY_LABELS[d.dayType] && DAY_LABELS[d.dayType].label) || d.dayType;
-        return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + (d.restDay ? ' (RD)' : '') +
-          '</td><td class="num">' + (d.absent ? 'ABSENT' : (d.regularMinutes / 60).toFixed(2)) +
+        if (d.restDay) dl += ' (RD)';
+        var regCell;
+        if (d.absent) regCell = 'ABSENT';
+        else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
+        else regCell = (d.regularMinutes / 60).toFixed(2);
+        return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) +
+          '</td><td class="num">' + regCell +
           '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) +
           '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
           '</td><td class="num">' + (d.lateMinutes || 0) +
@@ -1335,14 +1408,13 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
   }
 
-  var SAMPLE_DTR = 'EmployeeCode,Date,TimeIn,TimeOut,Break,DayType,RestDay,ScheduledIn,Absent,PaidLeave\n' +
-    'EMP-001,2026-07-01,08:00,17:00,60,regular,,08:00,,\n' +
-    'EMP-001,2026-07-02,08:15,19:00,60,regular,,08:00,,\n' +
-    'EMP-001,2026-07-08,,,,regular,,,1,\n' +
-    'EMP-001,2026-07-10,08:00,17:00,60,regular_holiday,,08:00,,\n' +
-    'EMP-001,2026-07-13,,,,regular_holiday,,,,\n' +
-    'EMP-002,2026-07-01,09:00,18:00,60,regular,,09:00,,\n' +
-    'EMP-002,2026-07-04,,,,regular,,,,1\n';
+  var SAMPLE_DTR = 'EmployeeCode,Date,TimeIn,TimeOut,Break,DayType,RestDay,ScheduledIn,ScheduledOut,Absent,LeaveType,RequiredHours\n' +
+    'EMP-001,2026-07-01,08:00,17:00,60,regular,,,,,,\n' +
+    'EMP-001,2026-07-02,08:15,19:30,60,regular,,,,,,\n' +
+    'EMP-001,2026-07-07,08:00,17:00,60,regular,,,,,SL,\n' +
+    'EMP-001,2026-07-08,,,,regular,,,,1,,\n' +
+    'EMP-001,2026-07-10,08:00,17:00,60,regular_holiday,,,,,,\n' +
+    'EMP-002,2026-07-04,,,,regular,,,,,VL,\n';
 
   var PAYSLIP_PRINT_CSS = '';
 

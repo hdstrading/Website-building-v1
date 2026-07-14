@@ -97,7 +97,7 @@
       restDay: !!day.restDay,
       workedMinutes: 0, regularMinutes: 0, otMinutes: 0, otRawMinutes: 0,
       nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0,
-      absent: !!day.absent, paidLeave: !!day.leavePaid
+      absent: !!day.absent, paidLeave: !!day.leavePaid, leaveType: day.leaveType || ''
     };
 
     // Resolve effective day type (rest-day upgrades)
@@ -268,6 +268,7 @@
     var iSchedOut = idx('scheduledout', 'schedout', 'shiftend');
     var iAbsent = idx('absent');
     var iLeave = idx('paidleave', 'leave');
+    var iLeaveType = idx('leavetype', 'leavecode');
     var iReq = idx('requiredhours', 'requiredhrs', 'reqhours');
 
     var out = {};
@@ -285,7 +286,8 @@
         scheduledIn: iSched >= 0 ? row[iSched].trim() : undefined,
         scheduledOut: iSchedOut >= 0 ? row[iSchedOut].trim() : undefined,
         absent: iAbsent >= 0 ? truthy(row[iAbsent]) : false,
-        leavePaid: iLeave >= 0 ? truthy(row[iLeave]) : false,
+        leaveType: normaliseLeave(iLeaveType >= 0 ? row[iLeaveType] : ''),
+        leavePaid: (iLeaveType >= 0 && normaliseLeave(row[iLeaveType])) ? true : (iLeave >= 0 ? truthy(row[iLeave]) : false),
         requiredMinutes: iReq >= 0 && row[iReq].trim() !== '' ? Math.round(parseFloat(row[iReq]) * 60) : undefined
       };
       (out[code] = out[code] || []).push(d);
@@ -296,6 +298,14 @@
   function truthy(v) {
     v = String(v || '').trim().toLowerCase();
     return v === '1' || v === 'y' || v === 'yes' || v === 'true' || v === 'x';
+  }
+  function normaliseLeave(v) {
+    v = String(v || '').trim().toUpperCase();
+    if (v === 'SL' || v === 'VL' || v === 'EL') return v;
+    if (/SICK/.test(v)) return 'SL';
+    if (/VAC/.test(v)) return 'VL';
+    if (/EMERG/.test(v)) return 'EL';
+    return '';
   }
   function normaliseType(v) {
     // Strip spaces/underscores/punctuation so "regular_holiday", "Regular Holiday"

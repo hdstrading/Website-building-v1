@@ -150,7 +150,8 @@
     );
     var period = {
       id: uid('per'), name: 'July 2026 (1–15)', startDate: '2026-07-01', endDate: '2026-07-15',
-      payDate: '2026-07-20', frequency: 'semi-monthly', applyContributions: true, status: 'draft'
+      payDate: '2026-07-20', frequency: 'semi-monthly',
+      applySSS: true, applyPhilHealth: true, applyPagIBIG: true, status: 'draft'
     };
     db.periods.push(period);
     save();

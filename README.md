@@ -18,7 +18,8 @@ deductions — then generates printable payslips.
 |------|--------------|
 | **Employee 201 File** | Full record: personal details, home address, contact, employment & regularization dates, government IDs (SSS, PhilHealth, Pag-IBIG, TIN), **bank details for salary credit**, and emergency contacts. Printable / downloadable as PDF. |
 | **Work schedule** | Each employee has a shift schedule (time in / out / break). The DTR uses it to automatically detect **tardiness, undertime and overtime** from the punches — no need to key in a schedule per day. |
-| **DTR upload** | Import a CSV time record, or enter days manually. Computes worked hours, overtime, night differential (10 PM–6 AM), tardiness and undertime. |
+| **DTR entry** | Opening a period's DTR **auto-fills a row per coverage date** (rest days pre-ticked) — just enter In/Out, or tick Rest / Absent, or pick a **leave type (SL / VL / EL)**. CSV import is also supported. Computes worked hours, overtime, night differential (10 PM–6 AM), tardiness and undertime. |
+| **Per-cutoff statutory deductions** | Each payroll period has independent **SSS / PhilHealth / Pag-IBIG** tick boxes, so you can deduct e.g. SSS on the 15th and PhilHealth + Pag-IBIG on the 30th. |
 | **Custom overtime policy** | Configurable OT rules: a **minimum before OT counts** (e.g. the first hour must be completed), **rounding blocks** (e.g. 30 minutes), and a **grace threshold** (e.g. within 5 minutes rounds up, so a 5:58 clock-out counts as 6:00). |
 | **DOLE premiums** | Applies statutory multipliers for regular OT, rest day, special non-working day, and regular holiday work (including rest-day combinations). Unworked **regular holidays** are paid 100%; special non-working days are "no work, no pay". |
 | **SSS** | Monthly Salary Credit computation with employee/employer/EC split (2025 15% schedule, editable). |
