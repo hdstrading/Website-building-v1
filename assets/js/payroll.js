@@ -121,11 +121,21 @@
       ? round2(grossPay * ppm) : r.monthlyBasic;
     var contrib = PH.statutory.computeContributions(contribBasis);
 
-    var applyContrib = ctx.period.applyContributions !== false;
-    var sssEE = applyContrib ? contrib.sss.ee : 0;
-    var phEE = applyContrib ? contrib.philhealth.ee : 0;
-    var piEE = applyContrib ? contrib.pagibig.ee : 0;
+    // Each contribution can be scheduled on a different cut-off, so they are
+    // toggled independently per period (with migration from the old flag).
+    var per = ctx.period;
+    var legacy = per.applyContributions !== false;
+    var applySSS = per.applySSS !== undefined ? !!per.applySSS : legacy;
+    var applyPH = per.applyPhilHealth !== undefined ? !!per.applyPhilHealth : legacy;
+    var applyPI = per.applyPagIBIG !== undefined ? !!per.applyPagIBIG : legacy;
+    var sssEE = applySSS ? contrib.sss.ee : 0;
+    var phEE = applyPH ? contrib.philhealth.ee : 0;
+    var piEE = applyPI ? contrib.pagibig.ee : 0;
     var contribTotalEE = round2(sssEE + phEE + piEE);
+    var employerTotal = round2(
+      (applySSS ? contrib.sss.er + contrib.sss.ec : 0) +
+      (applyPH ? contrib.philhealth.er : 0) +
+      (applyPI ? contrib.pagibig.er : 0));
 
     // ---- Withholding tax ----------------------------------------------------
     // Taxable base = taxable earnings this period − contributions this period
@@ -169,8 +179,9 @@
       nonTaxableEarnings: nonTaxableEarnings,
       contributions: {
         sss: contrib.sss, philhealth: contrib.philhealth, pagibig: contrib.pagibig,
-        employeeTotal: contribTotalEE, employerTotal: applyContrib ? contrib.employerTotal : 0,
-        basis: contribBasis, applied: applyContrib
+        employeeTotal: contribTotalEE, employerTotal: employerTotal,
+        basis: contribBasis,
+        appliedSSS: applySSS, appliedPhilHealth: applyPH, appliedPagIBIG: applyPI
       },
       withholdingTax: withholdingTax,
       taxableBase: taxableBase,

@@ -190,6 +190,11 @@ code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 12p
 .rpt-tbl th, .rpt-tbl td { white-space: nowrap; }
 .rpt-sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
 
+/* ---- Checkboxes ---- */
+.chk-row { display: flex; gap: 18px; flex-wrap: wrap; padding: 4px 0 6px; }
+.chk { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; cursor: pointer; }
+.chk input { width: auto; margin: 0; }
+
 /* ---- Settings: preview + advanced ---- */
 .preview-out { margin-top: 12px; }
 .preview-tbl { max-width: 460px; }
