@@ -1,0 +1,21 @@
+{
+  "name": "ph-payroll-server",
+  "version": "1.0.0",
+  "description": "Online multi-user backend for the PH Payroll app (auth, roles, company data, employee self-service).",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}

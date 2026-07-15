@@ -124,6 +124,18 @@ persist with your data.
 
 ---
 
+## 🌐 Online multi-user edition (optional)
+
+Alongside the offline app there's an **online server** (`server/`) for teams who
+want a shared system reachable from any device, with **user accounts**,
+**role-based access** (Super Admin / Admin-Payroll / Finance / Employee), and an
+**employee self-service portal** (view 201 & payslips, submit DTR, file leave).
+Employees **self-register** with their 201 details and an admin approves them.
+
+It reuses the same payroll engine and admin UI as the offline app. Deploy in one
+click to Render (`render.yaml`) or via Docker. See
+[`server/README.md`](server/README.md).
+
 ## 📱 Android app (tablet-ready)
 
 The same app is also packaged as a native **Android app** for tablets/phones —
