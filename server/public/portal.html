@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PH Payroll — Employee Portal</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₱</text></svg>">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f1f5f9; color: #1e293b; }
+    header { background: #0f2942; color: #fff; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; }
+    header .who { font-size: 14px; }
+    header .who b { display: block; font-size: 16px; }
+    .logout { background: rgba(255,255,255,.12); color: #fff; border: none; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    nav.tabs { display: flex; gap: 4px; background: #0e2138; padding: 0 10px; overflow-x: auto; }
+    nav.tabs a { color: #cbd5e1; padding: 12px 16px; text-decoration: none; font-weight: 600; font-size: 14px; white-space: nowrap; }
+    nav.tabs a.active { color: #fff; box-shadow: inset 0 -3px 0 #0891b2; }
+    main { max-width: 900px; margin: 0 auto; padding: 18px; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-bottom: 16px; }
+    .card h2 { margin: 0; font-size: 16px; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
+    .card .in { padding: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+    th { background: #f8fafc; color: #64748b; font-size: 12px; }
+    .num { text-align: right; }
+    input, select, textarea { padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 13px; font-family: inherit; }
+    label { font-size: 12px; color: #64748b; font-weight: 600; display: block; margin-bottom: 4px; }
+    .btn { background: #0e7490; color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
+    .btn.sm { padding: 5px 10px; font-size: 12px; }
+    .btn.ghost { background: #f1f5f9; color: #1e293b; border: 1px solid #e2e8f0; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+    .kv td:first-child { color: #64748b; width: 42%; }
+    .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+    .badge.pending { background: #fef3c7; color: #b45309; }
+    .badge.approved { background: #dcfce7; color: #15803d; }
+    .badge.rejected { background: #fee2e2; color: #b91c1c; }
+    .muted { color: #94a3b8; }
+    .msg { font-size: 13px; margin-top: 10px; }
+    .msg.ok { color: #15803d; } .msg.err { color: #b91c1c; }
+    .scroll { overflow-x: auto; }
+    @media(max-width:640px){ .grid2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="who"><b id="whoName">—</b><span id="whoMeta" class="muted"></span></div>
+    <button class="logout" id="logout">Log out</button>
+  </header>
+  <nav class="tabs">
+    <a href="#" class="active" data-tab="profile">My 201</a>
+    <a href="#" data-tab="dtr">My DTR</a>
+    <a href="#" data-tab="leave">File Leave</a>
+    <a href="#" data-tab="payslips">My Payslips</a>
+  </nav>
+  <main id="view"></main>
+
+  <script>
+    var peso = function (n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+    var state = { profile: null };
+
+    function api(url, opts) {
+      return fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}))
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); });
+    }
+    document.getElementById('logout').addEventListener('click', function () {
+      api('/api/auth/logout', { method: 'POST' }).then(function () { location.href = '/'; });
+    });
+    document.querySelectorAll('nav.tabs a').forEach(function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); go(a.dataset.tab); });
+    });
+    function go(tab) {
+      document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
+      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, payslips: viewPayslips })[tab]();
+    }
+
+    // ---- bootstrap ----
+    api('/api/auth/me').then(function (me) {
+      if (!me.body.user) { location.href = '/'; return; }
+      if (me.body.user.role !== 'employee') { location.href = '/app'; return; }
+      return api('/api/me/profile').then(function (p) {
+        state.profile = p.body;
+        document.getElementById('whoName').textContent = p.body.user.fullName || p.body.user.email;
+        var emp = p.body.employee;
+        document.getElementById('whoMeta').textContent = emp ? (emp.position || '') + (emp.code ? ' • ' + emp.code : '') : 'Awaiting 201 link';
+        go('profile');
+      });
+    });
+
+    // ---- My 201 ----
+    function viewProfile() {
+      var emp = state.profile.employee;
+      var src = emp || state.profile.profile || {};
+      function row(l, v) { return '<tr class="kv"><td>' + l + '</td><td>' + esc(v || '—') + '</td></tr>'; }
+      var body = !emp
+        ? '<p class="muted">Your account is not yet linked to an employee record. Some details you entered at sign-up are shown below; an administrator will finalize your 201 file.</p>'
+        : '';
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>My 201 File</h2><div class="in">' + body +
+        '<div class="grid2"><table>' +
+        row('Name', ((src.lastName || '') + ', ' + (src.firstName || '') + ' ' + (src.middleName || '')).trim()) +
+        row('Position', src.position) + row('Department', src.department) +
+        row('Date Hired', src.hireDate) + row('Employment Status', src.employmentStatus) +
+        row('Contact', src.contactNumber) + row('Address', src.address) +
+        '</table><table>' +
+        row('SSS No.', src.sssNo) + row('PhilHealth No.', src.philhealthNo) +
+        row('Pag-IBIG No.', src.pagibigNo) + row('TIN', src.tin) +
+        row('Bank', src.bankName) + row('Account Name', src.bankAccountName) + row('Account No.', src.bankAccountNumber) +
+        '</table></div></div></div>';
+    }
+
+    // ---- My DTR ----
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function coverageDays(period, restDow) {
+      var out = []; var s = new Date(period.startDate + 'T00:00:00'), e = new Date(period.endDate + 'T00:00:00');
+      if (isNaN(s) || isNaN(e)) return out;
+      var g = 0;
+      for (var d = new Date(s); d <= e && g < 400; d.setDate(d.getDate() + 1), g++) {
+        out.push({ date: d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()), restDay: d.getDay() === restDow });
+      }
+      return out;
+    }
+    function viewDTR() {
+      api('/api/me/periods').then(function (r) {
+        var periods = r.body.periods.filter(function (p) { return p.status !== 'finalized'; });
+        var opts = periods.map(function (p) { return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join('');
+        document.getElementById('view').innerHTML =
+          '<div class="card"><h2>My Daily Time Record</h2><div class="in">' +
+          (periods.length ? '<label>Payroll period</label><select id="perSel" style="max-width:320px">' + opts + '</select>' +
+            '<div id="dtrArea" style="margin-top:14px"></div>'
+            : '<p class="muted">No open payroll period to fill in yet.</p>') + '</div></div>';
+        if (!periods.length) return;
+        var sel = document.getElementById('perSel');
+        sel.addEventListener('change', function () { loadDtr(sel.value, periods); });
+        loadDtr(sel.value, periods);
+      });
+    }
+    function loadDtr(pid, periods) {
+      var period = periods.filter(function (p) { return p.id === pid; })[0];
+      api('/api/me/dtr/' + pid).then(function (r) {
+        var existing = r.body.days || [];
+        var restDow = (state.profile.employee && state.profile.employee.restDay != null) ? parseInt(state.profile.employee.restDay, 10) : -1;
+        var days = existing.length ? existing : coverageDays(period, restDow);
+        var emp = state.profile.employee || {};
+        var rows = days.map(function (d, i) {
+          return '<tr><td>' + esc(d.date || '') + '</td>' +
+            '<td><input name="in" value="' + esc(d.timeIn || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '" style="width:90px"></td>' +
+            '<td><input name="out" value="' + esc(d.timeOut || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '" style="width:90px"></td>' +
+            '<td style="text-align:center"><input name="rest" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
+            '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
+            '<td><select name="leave"><option value="">—</option>' +
+            ['SL', 'VL', 'EL'].map(function (t) { return '<option' + (d.leaveType === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') +
+            '</select></td></tr>';
+        }).join('');
+        document.getElementById('dtrArea').innerHTML =
+          '<div class="scroll"><table><thead><tr><th>Date</th><th>In</th><th>Out</th><th>Rest</th><th>Absent</th><th>Leave</th></tr></thead>' +
+          '<tbody id="dtrRows">' + rows + '</tbody></table></div>' +
+          '<button class="btn" id="dtrSave" style="margin-top:12px">Submit DTR</button><span id="dtrMsg" class="msg"></span>';
+        document.getElementById('dtrSave').addEventListener('click', function () {
+          var out = [];
+          document.querySelectorAll('#dtrRows tr').forEach(function (tr, i) {
+            var g = function (n) { return tr.querySelector('[name=' + n + ']'); };
+            var lt = g('leave').value;
+            out.push({ date: days[i].date, timeIn: g('in').value, timeOut: g('out').value,
+              restDay: g('rest').checked, absent: g('absent').checked, leaveType: lt, leavePaid: !!lt, dayType: 'regular' });
+          });
+          api('/api/me/dtr/' + pid, { method: 'POST', body: JSON.stringify({ days: out }) }).then(function (res) {
+            var m = document.getElementById('dtrMsg');
+            m.textContent = res.ok ? '  ✓ Submitted' : ('  ' + (res.body.error || 'Failed'));
+            m.className = 'msg ' + (res.ok ? 'ok' : 'err');
+          });
+        });
+      });
+    }
+
+    // ---- File Leave ----
+    function viewLeave() {
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>File a Leave Request</h2><div class="in">' +
+        '<div class="grid2">' +
+        '<div><label>From</label><input id="lFrom" type="date"></div>' +
+        '<div><label>To</label><input id="lTo" type="date"></div>' +
+        '<div><label>Type</label><select id="lType"><option value="VL">Vacation (VL)</option><option value="SL">Sick (SL)</option><option value="EL">Emergency (EL)</option></select></div>' +
+        '</div><label style="margin-top:10px">Reason</label><textarea id="lReason" rows="2" style="width:100%"></textarea>' +
+        '<button class="btn" id="lSubmit" style="margin-top:12px">Submit Request</button><span id="lMsg" class="msg"></span>' +
+        '</div></div><div class="card"><h2>My Leave Requests</h2><div class="in scroll" id="lList">Loading…</div></div>';
+      document.getElementById('lSubmit').addEventListener('click', function () {
+        var payload = { dateFrom: document.getElementById('lFrom').value, dateTo: document.getElementById('lTo').value,
+          leaveType: document.getElementById('lType').value, reason: document.getElementById('lReason').value };
+        var m = document.getElementById('lMsg');
+        if (!payload.dateFrom || !payload.dateTo) { m.textContent = '  Choose dates.'; m.className = 'msg err'; return; }
+        api('/api/me/leave', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
+          m.textContent = res.ok ? '  ✓ Submitted' : ('  ' + (res.body.error || 'Failed'));
+          m.className = 'msg ' + (res.ok ? 'ok' : 'err');
+          if (res.ok) { document.getElementById('lReason').value = ''; loadLeaveList(); }
+        });
+      });
+      loadLeaveList();
+    }
+    function loadLeaveList() {
+      api('/api/me/leave').then(function (r) {
+        var rows = (r.body.requests || []).map(function (x) {
+          return '<tr><td>' + esc(x.date_from) + ' → ' + esc(x.date_to) + '</td><td>' + esc(x.leave_type) +
+            '</td><td>' + esc(x.reason || '') + '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td></tr>';
+        }).join('');
+        document.getElementById('lList').innerHTML = rows
+          ? '<table><thead><tr><th>Dates</th><th>Type</th><th>Reason</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<p class="muted">No requests yet.</p>';
+      });
+    }
+
+    // ---- My Payslips ----
+    function viewPayslips() {
+      api('/api/me/payslips').then(function (r) {
+        var list = r.body.payslips || [];
+        var rows = list.map(function (x, i) {
+          return '<tr><td>' + esc(x.period.name) + '</td><td>' + esc(x.period.payDate || '') +
+            '</td><td class="num">' + peso(x.result.netPay) + '</td>' +
+            '<td><button class="btn sm" data-slip="' + i + '">View</button></td></tr>';
+        }).join('');
+        document.getElementById('view').innerHTML =
+          '<div class="card"><h2>My Payslips</h2><div class="in scroll">' +
+          (rows ? '<table><thead><tr><th>Period</th><th>Pay Date</th><th class="num">Net Pay</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+            : '<p class="muted">No finalized payslips yet.</p>') +
+          '</div></div><div id="slipView"></div>';
+        document.querySelectorAll('[data-slip]').forEach(function (b) {
+          b.addEventListener('click', function () { showSlip(list[b.dataset.slip]); });
+        });
+      });
+    }
+    function showSlip(x) {
+      var r = x.result, p = x.period;
+      var earn = (r.earnings || []).map(function (e) { return '<tr><td>' + esc(e.name) + '</td><td class="num">' + peso(e.amount) + '</td></tr>'; }).join('');
+      var ded = (r.deductions || []).map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') || '<tr><td class="muted">None</td><td></td></tr>';
+      document.getElementById('slipView').innerHTML =
+        '<div class="card"><h2>Payslip — ' + esc(p.name) + '</h2><div class="in">' +
+        '<div class="grid2"><div><h3 style="font-size:14px;margin:0 0 6px">Earnings</h3><table>' + earn +
+        '<tr><td><b>Gross</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></table></div>' +
+        '<div><h3 style="font-size:14px;margin:0 0 6px">Deductions</h3><table>' + ded +
+        '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
+        '<div style="margin-top:12px;background:#0f2942;color:#fff;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;font-weight:700"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div>' +
+        '<button class="btn ghost sm" style="margin-top:12px" onclick="window.print()">Print</button>' +
+        '</div></div>';
+      document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
+    }
+  </script>
+</body>
+</html>

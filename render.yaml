@@ -1,0 +1,25 @@
+# Render.com blueprint — one-click deploy of the online PH Payroll server.
+# In Render: New > Blueprint, point at this repo. Set SUPERADMIN_EMAIL and
+# SUPERADMIN_PASSWORD when prompted; JWT_SECRET is generated automatically.
+services:
+  - type: web
+    name: ph-payroll
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SUPERADMIN_EMAIL
+        sync: false
+      - key: SUPERADMIN_PASSWORD
+        sync: false
+      - key: DATA_DIR
+        value: /data
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

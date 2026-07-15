@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PH Payroll — Sign in</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₱</text></svg>">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #0e7490, #0f2942); min-height: 100vh; display: grid; place-items: center; padding: 20px; color: #1e293b; }
+    .card { background: #fff; width: 100%; max-width: 460px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.25); overflow: hidden; }
+    .head { text-align: center; padding: 26px 24px 10px; }
+    .mark { width: 52px; height: 52px; border-radius: 12px; display: inline-grid; place-items: center; background: linear-gradient(135deg, #0891b2, #0d9488); color: #fff; font-size: 28px; font-weight: 800; }
+    .head h1 { font-size: 20px; margin: 12px 0 2px; }
+    .head p { color: #64748b; font-size: 13px; margin: 0; }
+    .tabs { display: flex; border-bottom: 1px solid #e2e8f0; margin-top: 14px; }
+    .tab { flex: 1; padding: 12px; text-align: center; cursor: pointer; font-weight: 600; color: #64748b; font-size: 14px; }
+    .tab.active { color: #0e7490; box-shadow: inset 0 -2px 0 #0e7490; }
+    .body { padding: 20px 24px 26px; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #64748b; margin: 10px 0 4px; }
+    input, select { width: 100%; padding: 9px 11px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; }
+    input:focus, select:focus { outline: 2px solid #0891b2; border-color: #0891b2; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    .btn { width: 100%; margin-top: 18px; padding: 11px; border: none; border-radius: 8px; background: #0e7490; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .btn:hover { background: #0b6079; }
+    .btn:disabled { opacity: .6; cursor: default; }
+    .msg { margin-top: 12px; font-size: 13px; padding: 10px 12px; border-radius: 8px; display: none; }
+    .msg.err { display: block; background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+    .msg.ok { display: block; background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: #0e7490; font-weight: 700; margin: 16px 0 2px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+    .hint { font-size: 11px; color: #94a3b8; margin-top: 3px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div class="mark">₱</div>
+      <h1>PH Payroll</h1>
+      <p>Sign in to your account</p>
+    </div>
+    <div class="tabs">
+      <div class="tab active" data-tab="login">Sign In</div>
+      <div class="tab" data-tab="register">Register</div>
+    </div>
+    <div class="body">
+      <div id="msg" class="msg"></div>
+
+      <form id="loginForm">
+        <label>Email</label><input name="email" type="email" autocomplete="username" required>
+        <label>Password</label><input name="password" type="password" autocomplete="current-password" required>
+        <button class="btn" type="submit">Sign In</button>
+      </form>
+
+      <form id="registerForm" style="display:none">
+        <div class="section-title">Account</div>
+        <div class="grid2">
+          <div><label>Email</label><input name="email" type="email" required></div>
+          <div><label>Password</label><input name="password" type="password" minlength="6" required></div>
+        </div>
+        <div class="section-title">Personal (201 File)</div>
+        <div class="grid2">
+          <div><label>First Name</label><input name="firstName" required></div>
+          <div><label>Middle Name</label><input name="middleName"></div>
+          <div><label>Last Name</label><input name="lastName" required></div>
+          <div><label>Date of Birth</label><input name="birthDate" type="date"></div>
+          <div><label>Civil Status</label>
+            <select name="civilStatus"><option>Single</option><option>Married</option><option>Widowed</option><option>Separated</option></select></div>
+          <div><label>Contact Number</label><input name="contactNumber"></div>
+        </div>
+        <label>Home Address</label><input name="address">
+        <div class="section-title">Government IDs</div>
+        <div class="grid2">
+          <div><label>SSS No.</label><input name="sssNo"></div>
+          <div><label>PhilHealth No.</label><input name="philhealthNo"></div>
+          <div><label>Pag-IBIG No.</label><input name="pagibigNo"></div>
+          <div><label>TIN</label><input name="tin"></div>
+        </div>
+        <div class="section-title">Bank (for salary credit)</div>
+        <div class="grid2">
+          <div><label>Bank Name</label><input name="bankName"></div>
+          <div><label>Account Name</label><input name="bankAccountName"></div>
+        </div>
+        <label>Account Number</label><input name="bankAccountNumber">
+        <div class="section-title">Emergency Contact</div>
+        <div class="grid2">
+          <div><label>Name</label><input name="emergencyName"></div>
+          <div><label>Relationship</label><input name="emergencyRelation"></div>
+        </div>
+        <label>Contact Number</label><input name="emergencyContact">
+        <button class="btn" type="submit">Create Account</button>
+        <div class="hint">Your account will be reviewed by an administrator before you can sign in.</div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    var msg = document.getElementById('msg');
+    function showMsg(text, ok) { msg.textContent = text; msg.className = 'msg ' + (ok ? 'ok' : 'err'); }
+    function clearMsg() { msg.className = 'msg'; }
+
+    document.querySelectorAll('.tab').forEach(function (t) {
+      t.addEventListener('click', function () {
+        document.querySelectorAll('.tab').forEach(function (x) { x.classList.remove('active'); });
+        t.classList.add('active');
+        var isLogin = t.dataset.tab === 'login';
+        document.getElementById('loginForm').style.display = isLogin ? '' : 'none';
+        document.getElementById('registerForm').style.display = isLogin ? 'none' : '';
+        clearMsg();
+      });
+    });
+
+    function collect(form) {
+      var o = {}; new FormData(form).forEach(function (v, k) { o[k] = v; }); return o;
+    }
+    function redirectByRole(role) {
+      location.href = (role === 'employee') ? '/portal' : '/app';
+    }
+
+    // Already signed in? go straight in.
+    fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (j) {
+      if (j.user) redirectByRole(j.user.role);
+    });
+
+    document.getElementById('loginForm').addEventListener('submit', function (e) {
+      e.preventDefault(); clearMsg();
+      var btn = e.target.querySelector('button'); btn.disabled = true;
+      fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collect(e.target)) })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.ok) return showMsg(res.j.error || 'Sign in failed.');
+          redirectByRole(res.j.user.role);
+        }).catch(function () { btn.disabled = false; showMsg('Network error.'); });
+    });
+
+    document.getElementById('registerForm').addEventListener('submit', function (e) {
+      e.preventDefault(); clearMsg();
+      var d = collect(e.target);
+      var payload = { email: d.email, password: d.password, fullName: (d.firstName + ' ' + d.lastName).trim(), profile: d };
+      var btn = e.target.querySelector('button'); btn.disabled = true;
+      fetch('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.ok) return showMsg(res.j.error || 'Registration failed.');
+          showMsg(res.j.message || 'Registration submitted. Await administrator approval.', true);
+          e.target.reset();
+        }).catch(function () { btn.disabled = false; showMsg('Network error.'); });
+    });
+  </script>
+</body>
+</html>

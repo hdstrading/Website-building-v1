@@ -60,9 +60,15 @@
     PH.ui.render();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else { init(); }
-
+  // Expose for the online edition, which orchestrates its own init after
+  // fetching company data from the server.
+  PH.PRINT_CSS = PRINT_CSS;
   PH.init = init;
+
+  // The online edition sets window.__PH_NO_AUTOINIT__ to take over bootstrapping.
+  if (!window.__PH_NO_AUTOINIT__) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else { init(); }
+  }
 })(window.PH = window.PH || {});
