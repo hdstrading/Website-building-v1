@@ -26,7 +26,7 @@ deductions — then generates printable payslips.
 | **PhilHealth** | 5% premium with income floor/ceiling, 50/50 split (editable). |
 | **Pag-IBIG (HDMF)** | 1%/2% employee tiers with employer counterpart and salary cap (editable). |
 | **Withholding tax** | BIR TRAIN tables — daily, weekly, semi-monthly and monthly derived automatically. |
-| **Allowances & commissions** | Recurring taxable / non-taxable (de minimis) earnings, plus one-off per-period adjustments (commissions, bonuses). |
+| **Allowances & commissions** | Recurring taxable / non-taxable (de minimis) earnings on three bases: **Monthly**, **Per Pay Period**, or **Per Day Present** — the last pays a daily rate × days present in the DTR, excluding absences, rest days and leave. Plus one-off per-period adjustments (commissions, bonuses). |
 | **Loans, advances & in-house deductibles** | SSS/Pag-IBIG/company loans, **cash advances** and **product advances** (products taken from the company store), with a reference note, automatic amortization and running balance. |
 | **Payslips** | Detailed stub with itemized earnings/deductions, **full DTR daily breakdown**, and a **notes section** listing deductible balances. On-screen preview and downloadable as PDF (individually or in batch). |
 | **Reports** | **(A) Accounting report** — every earning & deduction itemized per employee. **(B) Finance report** — net pay + bank details for salary crediting. **(C–E) Government remittance** — SSS R-3, PhilHealth RF-1, Pag-IBIG MCRF monthly contribution lists. All printable/PDF and CSV. |

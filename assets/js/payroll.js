@@ -99,10 +99,24 @@
       remainingAfter: leaveRemaining - leaveDaysPaid
     };
 
-    // Recurring allowances (prorated by period, unless per-period already).
+    // Recurring allowances. Basis:
+    //  - 'daily'     : rate x days present in the DTR (attendance-based; excludes
+    //                  absences, rest days and leave — days with no worked time)
+    //  - 'perPeriod' : fixed amount each pay period
+    //  - 'monthly'   : monthly amount split across the period(s)
+    var daysPresent = dtr.daysPresent || 0;
     (ctx.allowances || []).forEach(function (a) {
-      var amt = a.perPeriod ? a.amount : round2(a.amount / ppm);
-      if (amt) earnings.push({ name: a.name, amount: amt, taxable: !!a.taxable, kind: a.type || 'allowance' });
+      var basis = a.basis || (a.perPeriod ? 'perPeriod' : 'monthly');
+      var amt, label = a.name;
+      if (basis === 'daily') {
+        amt = round2((a.amount || 0) * daysPresent);
+        label = a.name + ' (' + daysPresent + ' day' + (daysPresent !== 1 ? 's' : '') + ')';
+      } else if (basis === 'perPeriod') {
+        amt = round2(a.amount || 0);
+      } else {
+        amt = round2((a.amount || 0) / ppm);
+      }
+      if (amt) earnings.push({ name: label, amount: amt, taxable: !!a.taxable, kind: a.type || 'allowance' });
     });
     // One-off adjustments this period (commissions, bonuses, extra allowances).
     (ctx.adjustments || []).forEach(function (a) {

@@ -495,10 +495,12 @@
     var alw = S.list('allowances');
     var rows = alw.length ? alw.map(function (a) {
       var e = S.find('employees', a.employeeId);
+      var basis = a.basis || (a.perPeriod ? 'perPeriod' : 'monthly');
       return '<tr><td>' + esc(e ? e.code : '?') + '</td><td>' + esc(a.name) +
         '</td><td>' + esc(a.type || 'allowance') + '</td><td>' + money(a.amount) +
+        (basis === 'daily' ? '<span class="sub">/day present</span>' : '') +
         '</td><td>' + (a.taxable ? 'Taxable' : 'Non-taxable') +
-        '</td><td>' + (a.perPeriod ? 'Per Period' : 'Monthly') + '</td>' +
+        '</td><td>' + basisLabel(basis) + '</td>' +
         '<td class="row-actions"><button class="btn-sm" data-alw-edit="' + a.id + '">Edit</button>' +
         '<button class="btn-sm btn-danger" data-alw-del="' + a.id + '">Delete</button></td></tr>';
     }).join('') : '<tr><td colspan="7" class="muted">No recurring allowances/commissions defined.</td></tr>';
@@ -522,22 +524,35 @@
     });
   }
 
+  function basisLabel(basis) {
+    return { monthly: 'Monthly', perPeriod: 'Per Period', daily: 'Per Day Present' }[basis] || 'Monthly';
+  }
+
   function earningForm(a) {
-    a = a || { taxable: false, type: 'allowance', perPeriod: false };
+    a = a || { taxable: false, type: 'allowance', basis: 'monthly' };
+    var basis = a.basis || (a.perPeriod ? 'perPeriod' : 'monthly');
     var empOpts = S.list('employees').map(function (e) { return [e.id, e.code + ' — ' + e.lastName + ', ' + e.firstName]; });
     var body = '<div class="grid2">' +
       field('Employee', select('employeeId', empOpts, a.employeeId)) +
       field('Name', '<input name="name" value="' + esc(a.name || '') + '">') +
       field('Type', select('type', [['allowance','Allowance'],['commission','Commission'],['benefit','Benefit'],['other','Other']], a.type || 'allowance')) +
-      field('Amount', '<input name="amount" type="number" step="0.01" value="' + (a.amount || '') + '">') +
+      field('Amount / Rate',
+        '<input name="amount" type="number" step="0.01" value="' + (a.amount || '') + '">' +
+        '<small class="hint">For "Per Day Present" this is the <b>daily rate</b>.</small>') +
       field('Taxable?', select('taxable', [['false','Non-taxable (de minimis)'],['true','Taxable']], String(!!a.taxable))) +
-      field('Frequency', select('perPeriod', [['false','Monthly (split across periods)'],['true','Per Pay Period']], String(!!a.perPeriod))) +
+      field('Basis',
+        select('basis', [
+          ['monthly', 'Monthly (split across periods)'],
+          ['perPeriod', 'Per Pay Period (fixed)'],
+          ['daily', 'Per Day Present (from DTR attendance)']
+        ], basis) +
+        '<small class="hint">"Per Day Present" pays the rate × days present in the DTR — absences, rest days and leave are excluded (requires DTR entry).</small>') +
       '</div>';
     modal((a.id ? 'Edit' : 'Add') + ' Earning', body, function (form) {
       var d = collect(form); d.id = a.id;
       d.amount = parseFloat(d.amount) || 0;
       d.taxable = d.taxable === 'true';
-      d.perPeriod = d.perPeriod === 'true';
+      d.perPeriod = d.basis === 'perPeriod'; // keep legacy flag in sync
       if (!d.employeeId || !d.name) { alert('Employee and Name required.'); return false; }
       S.upsert('allowances', d); renderView();
     });
