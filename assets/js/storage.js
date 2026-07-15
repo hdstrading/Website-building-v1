@@ -140,9 +140,9 @@
     };
     db.employees.push(e1, e2);
     db.allowances.push(
-      { id: uid('alw'), employeeId: e1.id, name: 'Rice Allowance', amount: 2000, taxable: false, type: 'allowance' },
-      { id: uid('alw'), employeeId: e1.id, name: 'Transportation', amount: 1500, taxable: true, type: 'allowance' },
-      { id: uid('alw'), employeeId: e2.id, name: 'Meal Allowance', amount: 2000, taxable: false, type: 'allowance' }
+      { id: uid('alw'), employeeId: e1.id, name: 'Rice Allowance', amount: 2000, taxable: false, type: 'allowance', basis: 'monthly' },
+      { id: uid('alw'), employeeId: e1.id, name: 'Transportation', amount: 100, taxable: true, type: 'allowance', basis: 'daily' },
+      { id: uid('alw'), employeeId: e2.id, name: 'Meal Allowance', amount: 150, taxable: false, type: 'allowance', basis: 'daily' }
     );
     db.loans.push(
       { id: uid('lon'), employeeId: e1.id, type: 'SSS Loan', principal: 12000, monthlyAmortization: 1000, balance: 8000, startDate: '2024-11-01', active: true },
