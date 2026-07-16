@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PH Payroll — Choose Mode</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #0e7490, #0f2942); min-height: 100vh; display: grid; place-items: center; padding: 22px; color: #1e293b; }
+    .card { background: #fff; width: 100%; max-width: 440px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.25); padding: 26px 24px; }
+    .mark { width: 52px; height: 52px; border-radius: 12px; display: grid; place-items: center; background: linear-gradient(135deg, #0891b2, #0d9488); color: #fff; font-size: 28px; font-weight: 800; margin: 0 auto 10px; }
+    h1 { font-size: 20px; text-align: center; margin: 0 0 4px; }
+    p.sub { text-align: center; color: #64748b; font-size: 13px; margin: 0 0 18px; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #64748b; margin: 14px 0 5px; }
+    input { width: 100%; padding: 11px 12px; border: 1px solid #e2e8f0; border-radius: 9px; font-size: 15px; }
+    input:focus { outline: 2px solid #0891b2; border-color: #0891b2; }
+    .btn { width: 100%; margin-top: 14px; padding: 12px; border: none; border-radius: 9px; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .primary { background: #0e7490; color: #fff; }
+    .ghost { background: #f1f5f9; color: #1e293b; border: 1px solid #e2e8f0; }
+    .hint { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+    .divider { text-align: center; color: #cbd5e1; font-size: 12px; margin: 16px 0 4px; }
+    .err { color: #b91c1c; font-size: 13px; margin-top: 8px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark">₱</div>
+    <h1>PH Payroll</h1>
+    <p class="sub">Connect to your company's online server, or use the app offline on this device.</p>
+
+    <label>Server address</label>
+    <input id="url" type="url" inputmode="url" placeholder="https://payroll.yourcompany.com" autocapitalize="off" autocorrect="off">
+    <div class="hint">Ask your administrator for this address.</div>
+    <div id="err" class="err"></div>
+    <button class="btn primary" id="connect">Connect to Online Server</button>
+
+    <div class="divider">— or —</div>
+    <button class="btn ghost" id="offline">Use the Offline App on This Device</button>
+    <div class="hint">Offline mode stores data only on this tablet. You can switch anytime with the ⚙ button.</div>
+  </div>
+
+  <script>
+    var B = window.AndroidBridge;
+    var url = document.getElementById('url');
+    var err = document.getElementById('err');
+    // Pre-fill if a URL was set before.
+    try { var cur = B && B.currentTarget ? B.currentTarget() : ''; if (cur && cur !== 'offline') url.value = cur; } catch (e) {}
+
+    document.getElementById('connect').addEventListener('click', function () {
+      var v = (url.value || '').trim();
+      if (!/^https?:\/\/.+/i.test(v)) {
+        err.textContent = 'Enter a full address starting with https://';
+        err.style.display = 'block';
+        return;
+      }
+      if (B && B.setTarget) B.setTarget(v);
+    });
+    document.getElementById('offline').addEventListener('click', function () {
+      if (B && B.setTarget) B.setTarget('offline');
+    });
+  </script>
+</body>
+</html>

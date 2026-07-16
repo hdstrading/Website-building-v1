@@ -2,6 +2,7 @@ package com.hdstrading.phpayroll
 
 import android.annotation.SuppressLint
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -11,6 +12,7 @@ import android.print.PrintAttributes
 import android.print.PrintManager
 import android.provider.MediaStore
 import android.util.Base64
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -67,6 +69,9 @@ class MainActivity : ComponentActivity() {
             loadWithOverviewMode = true
             setSupportZoom(false)
         }
+        // Login sessions on the online server rely on cookies.
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
@@ -91,9 +96,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        webView.webViewClient = WebViewClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String) {
+                // Inject a small floating gear so the user can switch between the
+                // online server and the offline app at any time (not on the
+                // config screen itself).
+                if (!url.contains("config.html")) view.evaluateJavascript(GEAR_JS, null)
+            }
+        }
         webView.addJavascriptInterface(WebAppBridge(), "AndroidBridge")
-        webView.loadUrl("file:///android_asset/index.html")
+        loadTarget()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -105,6 +117,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         })
+    }
+
+    private fun prefs() = getSharedPreferences("phpay", Context.MODE_PRIVATE)
+
+    /** Load whatever target the user chose: the config screen, the offline app,
+     *  or an online server URL. */
+    private fun loadTarget() {
+        val target = prefs().getString("target", "") ?: ""
+        when {
+            target.isEmpty() -> webView.loadUrl("file:///android_asset/config.html")
+            target == "offline" -> webView.loadUrl("file:///android_asset/index.html")
+            else -> webView.loadUrl(target)
+        }
     }
 
     private fun toast(msg: String) {
@@ -170,5 +195,35 @@ class MainActivity : ComponentActivity() {
                 printWebViewRef = printer
             }
         }
+
+        /** Save the chosen target ("offline" or an https URL) and open it. */
+        @JavascriptInterface
+        fun setTarget(target: String) {
+            prefs().edit().putString("target", target.trim()).apply()
+            runOnUiThread { loadTarget() }
+        }
+
+        /** Re-open the config screen (from the floating gear). */
+        @JavascriptInterface
+        fun openConfig() {
+            runOnUiThread { webView.loadUrl("file:///android_asset/config.html") }
+        }
+
+        /** Current saved target, so the config screen can pre-fill it. */
+        @JavascriptInterface
+        fun currentTarget(): String = prefs().getString("target", "") ?: ""
+    }
+
+    companion object {
+        // Floating gear injected into every loaded page to reach the config screen.
+        private const val GEAR_JS =
+            "(function(){if(window.__phcfg)return;window.__phcfg=1;" +
+            "var b=document.createElement('button');b.textContent='\\u2699';" +
+            "b.setAttribute('aria-label','Server settings');" +
+            "b.style.cssText='position:fixed;bottom:12px;left:12px;z-index:2147483647;width:38px;height:38px;" +
+            "border-radius:50%;border:none;background:rgba(15,41,66,.82);color:#fff;font-size:17px;" +
+            "box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer;padding:0';" +
+            "b.onclick=function(){if(window.AndroidBridge&&AndroidBridge.openConfig)AndroidBridge.openConfig();};" +
+            "document.body.appendChild(b);})();"
     }
 }

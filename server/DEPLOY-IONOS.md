@@ -114,6 +114,34 @@ docker compose up -d         # start
     tar czf /backup/payroll-backup-$(date +%F).tgz -C /data .
   ```
 
+## Automatic deploys (GitHub Actions → your VPS)
+
+Once the server is running, you can have **every push to `main` auto-deploy**
+(the `Deploy to IONOS` workflow rsyncs the code and rebuilds the containers).
+It stays green and simply skips until you add these secrets.
+
+**One-time setup:**
+
+1. On your computer, create a dedicated deploy key (no passphrase):
+   ```bash
+   ssh-keygen -t ed25519 -f ionos_deploy -N "" -C "github-deploy"
+   ```
+2. Add the **public** key to the server so the Action can log in:
+   ```bash
+   ssh-copy-id -i ionos_deploy.pub root@YOUR_SERVER_IP
+   # or paste the contents of ionos_deploy.pub into the server's ~/.ssh/authorized_keys
+   ```
+3. Make sure `rsync` is on the server: `apt install -y rsync`
+4. In GitHub → **Settings → Secrets and variables → Actions → New repository secret**, add:
+   - `IONOS_HOST` — your server IP or domain
+   - `IONOS_USER` — e.g. `root`
+   - `IONOS_SSH_KEY` — the **private** key (contents of the `ionos_deploy` file)
+   - *(optional)* `IONOS_PORT` — SSH port if not 22
+   - *(optional)* `IONOS_APP_DIR` — app folder if not `/root/website-building-v1`
+
+That's it. Push to `main` (or run the workflow manually from the **Actions**
+tab) and the server updates itself — no more manual `git pull`.
+
 ## Notes
 
 - Always keep `JWT_SECRET` secret and run on HTTPS (this setup does).

@@ -5,7 +5,13 @@ inside an Android **WebView**. All payroll logic, data storage and screens are
 identical to the desktop/browser version — it just runs as a normal Android app
 you can install on a **tablet** (or phone).
 
-- ✅ **Fully offline** — no internet needed after install.
+On first launch the app asks whether to **connect to your online server** (enter
+its address, e.g. `https://payroll.yourcompany.com`) or **use the offline app**
+on the device. You can switch anytime with the floating **⚙** button. The online
+mode is the multi-user system (accounts, roles, employee self-service); offline
+mode is the standalone single-device app.
+
+- ✅ **Online or offline** — connect to the shared server or run standalone.
 - ✅ **Tablet-optimised** — the responsive layout uses the full screen.
 - ✅ **DTR / backup upload** — native file picker.
 - ✅ **PDF & CSV export** — payslips/reports print via Android's print system
