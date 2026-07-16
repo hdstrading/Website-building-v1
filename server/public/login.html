@@ -50,6 +50,7 @@
         <label>Email</label><input name="email" type="email" autocomplete="username" required>
         <label>Password</label><input name="password" type="password" autocomplete="current-password" required>
         <button class="btn" type="submit">Sign In</button>
+        <div style="text-align:center;margin-top:12px"><a href="#" id="forgotLink" style="color:#0e7490;font-size:13px;text-decoration:none">Forgot password?</a></div>
       </form>
 
       <form id="registerForm" style="display:none">
@@ -120,6 +121,16 @@
     // Already signed in? go straight in.
     fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (j) {
       if (j.user) redirectByRole(j.user.role);
+    });
+
+    document.getElementById('forgotLink').addEventListener('click', function (e) {
+      e.preventDefault(); clearMsg();
+      var email = document.querySelector('#loginForm [name=email]').value;
+      if (!email) { showMsg('Enter your email above first, then click "Forgot password?".'); return; }
+      fetch('/api/auth/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { showMsg(j.message || 'If that email is registered, a reset link has been sent.', true); })
+        .catch(function () { showMsg('Network error.'); });
     });
 
     document.getElementById('loginForm').addEventListener('submit', function (e) {

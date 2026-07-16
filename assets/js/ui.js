@@ -211,6 +211,9 @@
       '<h4 class="form-section">Government IDs</h4><div class="grid2">' +
         txt('sssNo', 'SSS No.') + txt('philhealthNo', 'PhilHealth No.') +
         txt('pagibigNo', 'Pag-IBIG No.') + txt('tin', 'TIN') +
+        field('Biometric / Device ID',
+          '<input name="biometricId" value="' + esc(emp.biometricId || '') + '">' +
+          '<small class="hint">The user ID/number on the biometric time clock (e.g. NGTeco). Used to match imported attendance.</small>') +
       '</div>' +
       '<h4 class="form-section">Bank Details (for salary credit)</h4><div class="grid2">' +
         txt('bankName', 'Bank Name') + txt('bankAccountName', 'Account Name') +
@@ -341,6 +344,13 @@
         '<input type="file" id="dtrFile" accept=".csv,text/csv">' +
         '<button class="btn" id="dtrImportBtn">Import into Period</button>' +
         '<div id="dtrImportMsg" class="msg"></div>') +
+      card('Import from Biometric Device (NGTeco)',
+        '<p class="muted">Export attendance from <b>NGTeco Office</b> (Excel/CSV) and import it here — punches are ' +
+        'matched to employees by their <b>Biometric / Device ID</b> (set on the employee\'s profile), then paired ' +
+        'into time-in / time-out per day for the selected period. Handles raw punch logs or in/out summaries.</p>' +
+        '<input type="file" id="bioFile" accept=".csv,text/csv">' +
+        '<button class="btn" id="bioImportBtn">Import Attendance</button>' +
+        '<div id="bioImportMsg" class="msg"></div>') +
       card('DTR Status — ' + esc(period.name),
         '<p class="muted">Each employee\'s <b>schedule</b> (set in their profile) is used to compute tardiness, undertime and overtime automatically from the punches.</p>' +
         '<table class="tbl"><thead><tr><th>Code</th><th>Employee</th><th>Schedule</th><th>Records</th><th></th></tr></thead><tbody>' +
@@ -371,6 +381,24 @@
           msg.textContent = 'Imported DTR for ' + matched + ' employee(s).' +
             (unmatched.length ? ' Unmatched codes: ' + unmatched.join(', ') : '');
           renderView();
+        } catch (err) { msg.className = 'msg err'; msg.textContent = 'Import failed: ' + err.message; }
+      };
+      reader.readAsText(file);
+    });
+    v.querySelector('#bioImportBtn').addEventListener('click', function () {
+      var file = v.querySelector('#bioFile').files[0];
+      var msg = v.querySelector('#bioImportMsg');
+      if (!file) { msg.textContent = 'Choose the exported attendance file first.'; msg.className = 'msg err'; return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var byBio = PH.dtr.importBiometricCsv(reader.result);
+          var res = importBiometricIntoPeriod(byBio, period);
+          S.save(); renderView();
+          var m2 = document.querySelector('#bioImportMsg');
+          m2.className = 'msg ok';
+          m2.textContent = 'Imported attendance for ' + res.matched + ' employee(s), ' + res.days + ' day(s) within ' +
+            period.name + '.' + (res.unmatched.length ? ' Unmatched device IDs: ' + res.unmatched.join(', ') : '');
         } catch (err) { msg.className = 'msg err'; msg.textContent = 'Import failed: ' + err.message; }
       };
       reader.readAsText(file);
@@ -487,6 +515,47 @@
   function weekdayName(iso) {
     var d = new Date(iso + 'T00:00:00');
     return isNaN(d.getTime()) ? '' : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  }
+
+  // Resolve a biometric device key to an employee: by Biometric/Device ID,
+  // then employee code, then an exact name match.
+  function resolveBioEmployee(key) {
+    var k = String(key || '').trim();
+    if (!k) return null;
+    var kl = k.toLowerCase();
+    var emps = S.list('employees');
+    return emps.find(function (e) { return (e.biometricId || '').trim() === k; }) ||
+      emps.find(function (e) { return e.code === k; }) ||
+      emps.find(function (e) {
+        var f = (e.firstName || '').toLowerCase().trim(), l = (e.lastName || '').toLowerCase().trim();
+        return kl === (f + ' ' + l).trim() || kl === (l + ' ' + f).trim() || kl === (l + ', ' + f).trim();
+      }) || null;
+  }
+  // Merge imported biometric days into a period's DTR (only dates in coverage).
+  function importBiometricIntoPeriod(byBio, period) {
+    var store = S.db.dtr[period.id] = S.db.dtr[period.id] || {};
+    var matched = 0, dayCount = 0, unmatched = [];
+    Object.keys(byBio).forEach(function (key) {
+      var emp = resolveBioEmployee(key);
+      if (!emp) { unmatched.push(key); return; }
+      matched++;
+      var byDate = {};
+      (store[emp.id] || []).forEach(function (d) { byDate[d.date] = d; });
+      byBio[key].forEach(function (day) {
+        if (!day.date) return;
+        if (period.startDate && day.date < period.startDate) return;
+        if (period.endDate && day.date > period.endDate) return;
+        var cur = byDate[day.date];
+        if (cur) { cur.timeIn = day.timeIn; cur.timeOut = day.timeOut; cur.absent = false; cur.leaveType = ''; cur.leavePaid = false; }
+        else {
+          byDate[day.date] = { date: day.date, timeIn: day.timeIn, timeOut: day.timeOut,
+            dayType: 'regular', breakMins: (emp.schedBreakMins != null ? emp.schedBreakMins : 60) };
+        }
+        dayCount++;
+      });
+      store[emp.id] = Object.keys(byDate).sort().map(function (d) { return byDate[d]; });
+    });
+    return { matched: matched, days: dayCount, unmatched: unmatched };
   }
 
   /* ===================== EARNINGS (allowances/commissions) ===================== */
@@ -695,7 +764,10 @@
     var fin = area.querySelector('#finalize');
     if (fin) fin.addEventListener('click', function () {
       if (confirm('Finalize this payroll? Loan balances will be reduced and results saved.')) {
-        PH.payroll.finalizePeriod(period); renderView();
+        PH.payroll.finalizePeriod(period);
+        // Online edition hook (e.g. email payslip notifications). No-op offline.
+        if (PH.onFinalize) { try { PH.onFinalize(period); } catch (e) { console.error(e); } }
+        renderView();
       }
     });
     var re = area.querySelector('#reopen');

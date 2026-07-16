@@ -52,6 +52,17 @@ function requireRole(...roles) {
 }
 const requireAdmin = requireRole(...ADMIN_ROLES);
 
+// Short-lived token for password-reset links.
+function makeResetToken(userId) {
+  return jwt.sign({ uid: userId, purpose: 'reset' }, JWT_SECRET, { expiresIn: '1h' });
+}
+function verifyResetToken(token) {
+  try {
+    const p = jwt.verify(token, JWT_SECRET);
+    return p && p.purpose === 'reset' ? p.uid : null;
+  } catch (e) { return null; }
+}
+
 function publicUser(u) {
   if (!u) return null;
   return {
@@ -63,5 +74,6 @@ function publicUser(u) {
 module.exports = {
   ROLES, ADMIN_ROLES, COOKIE,
   hashPassword, verifyPassword, issueToken, clearToken,
-  authenticate, requireAuth, requireRole, requireAdmin, publicUser
+  authenticate, requireAuth, requireRole, requireAdmin, publicUser,
+  makeResetToken, verifyResetToken
 };

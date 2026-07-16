@@ -228,6 +228,34 @@
         });
       });
     }
+    function payslipDoc(x) {
+      var r = x.result, p = x.period, c = state.profile.company || {};
+      var earn = (r.earnings || []).map(function (e) { return '<tr><td>' + esc(e.name) + '</td><td class="num">' + peso(e.amount) + '</td></tr>'; }).join('');
+      var ded = (r.deductions || []).map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') || '<tr><td>None</td><td></td></tr>';
+      var css = 'body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:16px}.ps{border:1px solid #333;padding:16px;max-width:640px}' +
+        '.h{display:flex;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:6px}.co{font-size:18px;font-weight:bold}' +
+        '.t{font-size:15px;font-weight:bold;letter-spacing:1px}.cols{display:flex;gap:18px;margin-top:10px}.cols>div{flex:1}' +
+        'table{width:100%;border-collapse:collapse;font-size:12px}td{padding:3px 4px;border-bottom:1px dotted #ccc}.num{text-align:right}' +
+        '.net{margin-top:10px;background:#111;color:#fff;padding:8px 12px;display:flex;justify-content:space-between;font-weight:bold;font-size:15px}';
+      return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip ' + esc(p.name) + '</title><style>' + css + '</style></head><body>' +
+        '<div class="ps"><div class="h"><div><div class="co">' + esc(c.name || 'Company') + '</div><div style="font-size:11px;color:#555">' + esc(c.address || '') + '</div></div><div class="t">PAYSLIP</div></div>' +
+        '<div style="font-size:12px;margin:8px 0"><b>' + esc(state.profile.user.fullName || '') + '</b> &nbsp; Period: ' + esc(p.name) + ' &nbsp; Pay Date: ' + esc(p.payDate || '—') + '</div>' +
+        '<div class="cols"><div><h4>Earnings</h4><table>' + earn + '<tr><td><b>Gross</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></table></div>' +
+        '<div><h4>Deductions</h4><table>' + ded + '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
+        '<div class="net"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div></div></body></html>';
+    }
+    function printPayslip(x) {
+      var html = payslipDoc(x);
+      // Native Android print when running inside the app; browser print otherwise.
+      if (window.AndroidBridge && window.AndroidBridge.printHtml) {
+        window.AndroidBridge.printHtml('Payslip ' + x.period.name, btoa(unescape(encodeURIComponent(html))));
+        return;
+      }
+      var w = window.open('', '_blank');
+      if (!w) { window.print(); return; }
+      w.document.write(html); w.document.close(); w.focus();
+      setTimeout(function () { w.print(); }, 300);
+    }
     function showSlip(x) {
       var r = x.result, p = x.period;
       var earn = (r.earnings || []).map(function (e) { return '<tr><td>' + esc(e.name) + '</td><td class="num">' + peso(e.amount) + '</td></tr>'; }).join('');
@@ -239,8 +267,9 @@
         '<div><h3 style="font-size:14px;margin:0 0 6px">Deductions</h3><table>' + ded +
         '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
         '<div style="margin-top:12px;background:#0f2942;color:#fff;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;font-weight:700"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div>' +
-        '<button class="btn ghost sm" style="margin-top:12px" onclick="window.print()">Print</button>' +
+        '<button class="btn ghost sm" id="slipPrint" style="margin-top:12px">Print / Save PDF</button>' +
         '</div></div>';
+      document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });
       document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
     }
   </script>
