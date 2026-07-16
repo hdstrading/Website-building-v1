@@ -45,7 +45,12 @@ Open `http://localhost:3000`, sign in as the Super Admin, and go.
 
 The SQLite database is stored on a **1 GB persistent disk** mounted at `/data`, so data survives restarts and redeploys.
 
-### Option B — Docker (any host / your own server)
+### Option B — IONOS (VPS with Docker)
+A full step-by-step guide (create the VPS, point your domain, one-command launch
+with automatic HTTPS) is in **[`DEPLOY-IONOS.md`](DEPLOY-IONOS.md)**. It uses the
+`docker-compose.yml` + `Caddyfile` at the repo root.
+
+### Option C — Docker (any host / your own server)
 
 ```bash
 # build from the REPO ROOT (so the shared engine is included)
