@@ -1,0 +1,6 @@
+# Caddy reads SITE_ADDRESS from server/.env.
+#   - A domain (e.g. payroll.example.com) => automatic HTTPS via Let's Encrypt.
+#   - ":80" => plain HTTP only (quick test without a domain).
+{$SITE_ADDRESS} {
+    reverse_proxy app:3000
+}

@@ -1,0 +1,40 @@
+# One-command deploy for an IONOS VPS (or any Docker host).
+#   1) cp server/.env.example server/.env   and edit the values
+#   2) docker compose up -d --build
+#
+# Runs the payroll server behind Caddy, which obtains and renews HTTPS
+# certificates automatically once your domain points at this server.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    env_file: ./server/.env
+    environment:
+      - DATA_DIR=/data
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - payroll_data:/data
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    env_file: ./server/.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  payroll_data:
+  caddy_data:
+  caddy_config:
