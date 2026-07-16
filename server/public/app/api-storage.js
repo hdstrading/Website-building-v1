@@ -74,6 +74,25 @@
   }
   function save() { scheduleSave(); return db; }
 
+  // Force an immediate save and resolve when the server has it (used before
+  // actions that depend on the saved data, e.g. emailing payslips on finalize).
+  function saveNow() {
+    if (role === 'finance') return Promise.resolve();
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    db.statutoryConfig = PH.statutory.config;
+    dirty = false;
+    return fetch('/api/company', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: db, version: version })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('Save failed (' + r.status + ')')); });
+      return r.json();
+    }).then(function (j) {
+      version = j.version;
+      PH.storage.onStatus && PH.storage.onStatus('saved');
+    });
+  }
+
   function uid(prefix) {
     return (prefix || 'id') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
   }
@@ -108,6 +127,6 @@
     list: list, find: find, upsert: upsert, remove: remove,
     exportJSON: exportJSON, importJSON: importJSON,
     resetAll: resetAll, seedIfEmpty: seedIfEmpty, emptyDB: emptyDB,
-    flush: flush, onStatus: null
+    flush: flush, saveNow: saveNow, onStatus: null
   };
 })(window.PH = window.PH || {});

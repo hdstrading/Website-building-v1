@@ -7,11 +7,19 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const { db, emptyCompanyData } = require('./db');
 const A = require('./auth');
+const mailer = require('./mailer');
 
 const app = express();
+app.set('trust proxy', true); // behind Caddy/Nginx: honour X-Forwarded-Proto
 app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 app.use(A.authenticate);
+
+// Public base URL for links in emails (env override, else derive from request).
+function baseUrl(req) {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
+  return req.protocol + '://' + req.get('host');
+}
 
 /* ---------- helpers ---------- */
 function getCompany() {
@@ -63,6 +71,40 @@ app.post('/api/auth/login', (req, res) => {
 
 app.post('/api/auth/logout', (req, res) => { A.clearToken(res); res.json({ ok: true }); });
 app.get('/api/auth/me', (req, res) => res.json({ user: A.publicUser(req.user) }));
+
+// Forgot password: emails a reset link (only when SMTP is configured).
+app.post('/api/auth/forgot', async (req, res) => {
+  const email = String((req.body && req.body.email) || '').toLowerCase();
+  if (!mailer.configured()) {
+    return res.json({ ok: true, emailConfigured: false,
+      message: 'Password reset by email is not set up on this server. Please ask your administrator to reset your password.' });
+  }
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (user && user.status !== 'disabled') {
+    const link = baseUrl(req) + '/reset.html?token=' + encodeURIComponent(A.makeResetToken(user.id));
+    try {
+      await mailer.sendMail({
+        to: user.email,
+        subject: 'Reset your PH Payroll password',
+        html: '<p>Hi ' + (user.full_name || '') + ',</p><p>Click the link below to set a new password (valid for 1 hour):</p>' +
+          '<p><a href="' + link + '">Reset my password</a></p><p>If you did not request this, you can ignore this email.</p>',
+        text: 'Reset your password: ' + link
+      });
+    } catch (e) { /* swallow — do not reveal */ }
+  }
+  // Always respond generically so the form can't be used to probe emails.
+  res.json({ ok: true, emailConfigured: true,
+    message: 'If that email is registered, a reset link has been sent.' });
+});
+
+app.post('/api/auth/reset', (req, res) => {
+  const { token, password } = req.body || {};
+  const uid = A.verifyResetToken(token || '');
+  if (!uid) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+  if (!password || String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(password), uid);
+  res.json({ ok: true });
+});
 
 /* ================= COMPANY DATA (admin) ================= */
 app.get('/api/company', A.requireAdmin, (req, res) => {
@@ -155,6 +197,49 @@ app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
   db.prepare('UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
     .run(decision, req.user.id, req.params.id);
   res.json({ ok: true });
+});
+
+// Admin resets a user's password (provide one, or a random one is generated).
+app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  let pw = (req.body && req.body.password) || '';
+  let generated = false;
+  if (!pw) { pw = Math.random().toString(36).slice(2, 10); generated = true; }
+  if (String(pw).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(pw), user.id);
+  res.json({ ok: true, password: generated ? pw : undefined });
+});
+
+// Email employees that their payslip for a finalized period is ready.
+app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
+  const { periodId } = req.body || {};
+  const data = getCompanyData();
+  const period = (data.periods || []).find(p => p.id === periodId);
+  if (!period) return res.status(404).json({ error: 'Period not found.' });
+  const results = data.payrolls[periodId] || {};
+  const base = baseUrl(req);
+  let sent = 0, skipped = 0;
+  const users = db.prepare("SELECT * FROM users WHERE role = 'employee' AND status = 'active' AND employee_code IS NOT NULL").all();
+  for (const u of users) {
+    const emp = findEmpByCode(data, u.employee_code);
+    if (!emp || !results[emp.id]) continue;              // no payslip for them this period
+    if (!u.email) { skipped++; continue; }
+    const net = results[emp.id].netPay;
+    try {
+      const r = await mailer.sendMail({
+        to: u.email,
+        subject: 'Your payslip for ' + period.name + ' is ready',
+        html: '<p>Hi ' + (u.full_name || '') + ',</p>' +
+          '<p>Your payslip for <b>' + period.name + '</b> is now available.</p>' +
+          '<p>Net pay: <b>₱' + Number(net).toLocaleString('en-PH', { minimumFractionDigits: 2 }) + '</b></p>' +
+          '<p><a href="' + base + '/portal">Open the employee portal</a> to view and print it.</p>',
+        text: 'Your payslip for ' + period.name + ' is ready. Open ' + base + '/portal to view it.'
+      });
+      if (r && r.skipped) skipped++; else sent++;
+    } catch (e) { skipped++; }
+  }
+  res.json({ ok: true, sent, skipped, emailConfigured: mailer.configured() });
 });
 
 /* ================= EMPLOYEE SELF-SERVICE ================= */

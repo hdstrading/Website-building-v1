@@ -319,6 +319,114 @@
     return 'regular';
   }
 
+  /* ---- Biometric attendance import (NGTeco NG-TC1 export & similar) --------
+   * NGTeco has no direct API; you export attendance (Excel/CSV) from NGTeco
+   * Office and import it here. Handles two shapes:
+   *   (a) raw punch log  — one row per punch with a date/time; grouped per
+   *       person per day into first punch = time in, last = time out.
+   *   (b) daily summary  — one row per person per day with in/out columns.
+   * Returns { biometricId: [ {date, timeIn, timeOut} ] }, keyed by the device
+   * user id/number so the UI can map it to an employee.
+   */
+  function pad2n(n) { return (n < 10 ? '0' : '') + n; }
+  function minutesToHHMM(m) { return pad2n(Math.floor(m / 60)) + ':' + pad2n(m % 60); }
+  // Normalise a date token to YYYY-MM-DD (accepts YYYY-M-D, M/D/YYYY, D/M/YYYY).
+  function normaliseDate(s) {
+    s = String(s || '').trim();
+    var m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+    if (m) return m[1] + '-' + pad2n(+m[2]) + '-' + pad2n(+m[3]);
+    m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (m) {
+      var a = +m[1], b = +m[2];
+      // If the first field is > 12 it must be the day (D/M/Y); otherwise assume M/D/Y.
+      var mo = a > 12 ? b : a, da = a > 12 ? a : b;
+      return m[3] + '-' + pad2n(mo) + '-' + pad2n(da);
+    }
+    return s;
+  }
+  // Split a combined "date time" value into { date, time }.
+  function splitDateTime(s) {
+    s = String(s || '').trim();
+    var parts = s.split(/[ T]+/);
+    if (parts.length >= 2) {
+      var timePart = parts.slice(1).join(' ');
+      return { date: normaliseDate(parts[0]), time: timePart };
+    }
+    return { date: normaliseDate(s), time: '' };
+  }
+
+  function importBiometricCsv(text) {
+    var rows = parseCSV(text);
+    if (!rows.length) return {};
+    var header = rows[0].map(function (h) { return h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); });
+    function idx() {
+      for (var a = 0; a < arguments.length; a++) {
+        var j = header.indexOf(arguments[a]); if (j >= 0) return j;
+      }
+      return -1;
+    }
+    var iId = idx('userid', 'employeeid', 'empid', 'pin', 'enrollid', 'acno', 'id', 'no', 'usernumber', 'personid');
+    var iName = idx('name', 'username', 'employeename', 'fullname');
+    var iDateTime = idx('datetime', 'punchtime', 'clocktime', 'timestamp', 'checktime', 'time');
+    var iDate = idx('date', 'attdate', 'workdate');
+    var iIn = idx('clockin', 'timein', 'checkin', 'in', 'signin', 'onduty');
+    var iOut = idx('clockout', 'timeout', 'checkout', 'out', 'signout', 'offduty');
+    // "time" can be a punch time (raw) or unused; prefer explicit in/out if present.
+    var out = {};
+    function keyFor(row) {
+      var k = iId >= 0 ? String(row[iId] || '').trim() : '';
+      if (!k && iName >= 0) k = String(row[iName] || '').trim();
+      return k;
+    }
+
+    var dailyMode = iIn >= 0 && iOut >= 0;
+    if (dailyMode) {
+      for (var r = 1; r < rows.length; r++) {
+        var row = rows[r]; var key = keyFor(row); if (!key) continue;
+        var date = iDate >= 0 ? normaliseDate(row[iDate]) : '';
+        if (!date && iDateTime >= 0) date = splitDateTime(row[iDateTime]).date;
+        if (!date) continue;
+        (out[key] = out[key] || []).push({
+          date: date,
+          timeIn: String(row[iIn] || '').trim(),
+          timeOut: String(row[iOut] || '').trim()
+        });
+      }
+      return out;
+    }
+
+    // Raw punch mode: group all punches by person + day, in=earliest, out=latest.
+    var groups = {}; // key -> date -> { min:{m,s}, max:{m,s} }
+    for (var r2 = 1; r2 < rows.length; r2++) {
+      var row2 = rows[r2]; var key2 = keyFor(row2); if (!key2) continue;
+      var date2, timeStr;
+      if (iDateTime >= 0) { var dt = splitDateTime(row2[iDateTime]); date2 = dt.date; timeStr = dt.time; }
+      else if (iDate >= 0) { date2 = normaliseDate(row2[iDate]); timeStr = ''; }
+      else continue;
+      if (!date2 || !timeStr) continue;
+      var mins = toMinutes(timeStr);
+      if (mins == null) continue;
+      var g = groups[key2] || (groups[key2] = {});
+      var d = g[date2];
+      if (!d) { g[date2] = { min: { m: mins, s: timeStr }, max: { m: mins, s: timeStr } }; }
+      else {
+        if (mins < d.min.m) d.min = { m: mins, s: timeStr };
+        if (mins > d.max.m) d.max = { m: mins, s: timeStr };
+      }
+    }
+    Object.keys(groups).forEach(function (key3) {
+      Object.keys(groups[key3]).sort().forEach(function (date3) {
+        var d3 = groups[key3][date3];
+        (out[key3] = out[key3] || []).push({
+          date: date3,
+          timeIn: minutesToHHMM(d3.min.m),
+          timeOut: d3.max.m > d3.min.m ? minutesToHHMM(d3.max.m) : ''
+        });
+      });
+    });
+    return out;
+  }
+
   PH.dtr = {
     DAY_TYPES: DAY_TYPES,
     NIGHT_DIFF_RATE: NIGHT_DIFF_RATE,
@@ -329,6 +437,8 @@
     computeDayPay: computeDayPay,
     computeDTR: computeDTR,
     parseCSV: parseCSV,
-    importDTRCsv: importDTRCsv
+    importDTRCsv: importDTRCsv,
+    importBiometricCsv: importBiometricCsv,
+    normaliseDate: normaliseDate
   };
 })(window.PH = window.PH || {});
