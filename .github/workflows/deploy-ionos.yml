@@ -1,0 +1,87 @@
+name: Deploy to IONOS
+
+# Auto-deploys the online server to your IONOS VPS on every push to main.
+# It stays green and simply skips until you add the deploy secrets (below).
+#
+# Required repo secrets (Settings > Secrets and variables > Actions):
+#   IONOS_HOST     - server IP or domain (e.g. 203.0.113.10)
+#   IONOS_USER     - SSH user (e.g. root)
+#   IONOS_SSH_KEY  - PRIVATE deploy key (matching a public key in the server's
+#                    ~/.ssh/authorized_keys)
+# Optional:
+#   IONOS_PORT     - SSH port (default 22)
+#   IONOS_APP_DIR  - app folder on the server (default /root/website-building-v1)
+#
+# See server/DEPLOY-IONOS.md for the one-time server + secrets setup.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'server/**'
+      - 'assets/**'
+      - 'index.html'
+      - 'samples/**'
+      - 'docker-compose.yml'
+      - 'Caddyfile'
+      - '.github/workflows/deploy-ionos.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ionos
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      IONOS_HOST: ${{ secrets.IONOS_HOST }}
+      IONOS_USER: ${{ secrets.IONOS_USER }}
+      IONOS_PORT: ${{ secrets.IONOS_PORT }}
+      IONOS_APP_DIR: ${{ secrets.IONOS_APP_DIR }}
+    steps:
+      - name: Check deploy secrets are configured
+        id: cfg
+        run: |
+          if [ -z "$IONOS_HOST" ] || [ -z "$IONOS_USER" ] || [ -z "${{ secrets.IONOS_SSH_KEY }}" ]; then
+            echo "IONOS deploy secrets are not set yet — skipping deploy (this is expected until you configure them)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.configured == 'true'
+        uses: actions/checkout@v5
+
+      - name: Set up SSH
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.IONOS_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          PORT="${IONOS_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$IONOS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Sync code to server
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          PORT="${IONOS_PORT:-22}"
+          DIR="${IONOS_APP_DIR:-/root/website-building-v1}"
+          # --delete keeps the server clean; excluded paths (.env, DB, node_modules)
+          # are protected from deletion by rsync.
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='server/.env' \
+            --exclude='server/data' \
+            -e "ssh -i ~/.ssh/id_deploy -p $PORT -o StrictHostKeyChecking=accept-new" \
+            ./ "$IONOS_USER@$IONOS_HOST:$DIR/"
+
+      - name: Rebuild & restart containers
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          PORT="${IONOS_PORT:-22}"
+          DIR="${IONOS_APP_DIR:-/root/website-building-v1}"
+          ssh -i ~/.ssh/id_deploy -p "$PORT" -o StrictHostKeyChecking=accept-new \
+            "$IONOS_USER@$IONOS_HOST" \
+            "cd '$DIR' && docker compose up -d --build --remove-orphans && docker image prune -f"

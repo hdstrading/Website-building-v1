@@ -40,11 +40,15 @@ android {
  * app's assets before every build, so the web app and the APK never drift.
  */
 tasks.register('copyWebApp', Copy) {
-    description = 'Bundle the offline web app into the APK assets.'
+    description = 'Bundle the offline web app (+ the online-mode config screen) into the APK assets.'
     from(rootProject.projectDir.parentFile) {
         include 'index.html'
         include 'assets/**'
         include 'samples/**'
+    }
+    // Android-only launcher screen (offline vs online server chooser).
+    from(layout.projectDirectory.dir('extra')) {
+        include 'config.html'
     }
     into layout.projectDirectory.dir('src/main/assets')
 }
