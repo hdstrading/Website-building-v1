@@ -69,14 +69,26 @@
    *    e.g. 58 min -> 60 (within 5 of 60); 40 min -> 30.
    *  - OT is only credited once the first block of `minMinutes` (default 60,
    *    "the first hour") is completed. Below that, OT = 0.
+   *  - Late penalty (when `lateForfeitsFirstHour` is on, default): if the
+   *    employee is late by more than `graceMinutes`, the first hour of OT is
+   *    NOT approved and the remainder is credited only in COMPLETE whole hours.
+   *    e.g. late + 2h30m OT -> 1h; late + 1h30m OT -> 0.
    */
-  function applyOtRules(otRaw, rules) {
+  function applyOtRules(otRaw, rules, lateMinutes) {
     rules = rules || {};
     if (rules.enabled === false) return 0;
     if (!(otRaw > 0)) return 0;
     var inc = rules.incrementMinutes > 0 ? rules.incrementMinutes : 30;
     var grace = rules.graceMinutes != null ? rules.graceMinutes : 5;
     var minM = rules.minMinutes != null ? rules.minMinutes : 60;
+    var late = lateMinutes || 0;
+
+    if (late > grace && rules.lateForfeitsFirstHour !== false) {
+      var creditable = otRaw - minM;          // forfeit the first hour
+      if (creditable <= 0) return 0;
+      return Math.floor(creditable / 60) * 60; // complete whole hours only
+    }
+
     var blocks = Math.floor(otRaw / inc);
     var rem = otRaw - blocks * inc;
     if (rem >= inc - grace) blocks += 1;   // within grace of the next block
@@ -144,7 +156,7 @@
       result.regularMinutes = required;
       var otRaw = Math.max(0, outN - schedOutN);
       result.otRawMinutes = otRaw;
-      result.otMinutes = applyOtRules(otRaw, opts.ot);
+      result.otMinutes = applyOtRules(otRaw, opts.ot, result.lateMinutes);
     } else {
       // ----- Fallback (no schedule set): pay by hours worked beyond 8 -----
       var required2 = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
@@ -179,6 +191,7 @@
       daysPresent: 0, daysAbsent: 0, paidLeaves: 0,
       holidayDaysUnworked: 0,   // unworked REGULAR holidays -> paid at 100%
       leaveDaysRequested: 0,    // unworked paid-leave days (gated by credits in payroll)
+      leaveDays: [],            // [{date, type}] in order, for per-type pay & credits
       regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
       lateMinutes: 0, undertimeMinutes: 0,
       regularPay: 0, overtimePay: 0, nightDiffPay: 0,
@@ -197,7 +210,10 @@
       //  - Special non-working day not worked => no work, no pay (nothing added).
       if (!r.absent && r.workedMinutes === 0) {
         if (/regular_hol/.test(r.dayType)) { summary.holidayDaysUnworked++; r.unworkedHoliday = true; }
-        else if (r.paidLeave) summary.leaveDaysRequested++;
+        else if (r.paidLeave) {
+          summary.leaveDaysRequested++;
+          summary.leaveDays.push({ date: r.date, type: r.leaveType || '' });
+        }
       }
       summary.regularMinutes += r.regularMinutes;
       summary.otMinutes += r.otMinutes;

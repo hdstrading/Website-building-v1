@@ -68,7 +68,7 @@ function emptyCompanyData() {
     meta: {
       version: 1,
       company: { name: 'My Company', address: '', tin: '' },
-      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 }
+      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true }
     },
     employees: [], allowances: [], loans: [], periods: [],
     dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, statutoryConfig: null

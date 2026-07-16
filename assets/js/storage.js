@@ -15,7 +15,7 @@
         version: 1,
         company: { name: 'My Company', address: '', tin: '' },
         // Company overtime policy (editable in Settings).
-        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 }
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true }
       },
       employees: [],
       allowances: [],   // recurring earnings tied to an employee
@@ -43,6 +43,7 @@
     // Migrate older saved data that predates newer settings.
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
+    if (db.meta.overtime.lateForfeitsFirstHour === undefined) db.meta.overtime.lateForfeitsFirstHour = true;
     if (!db.thirteenthMonth) db.thirteenthMonth = {};
     return db;
   }

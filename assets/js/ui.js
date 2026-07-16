@@ -1657,6 +1657,9 @@
         field('Grace / rounding threshold (minutes)',
           '<input id="otGrace" type="number" value="' + (ot.graceMinutes != null ? ot.graceMinutes : 5) + '">' +
           '<small class="hint">Within this many minutes of a block, round up. e.g. 5 → clock-out 5:58 counts as 6:00 (1 hour).</small>') +
+        field('Late employees forfeit first OT hour',
+          select('otLateForfeit', [['true','Yes — a late employee loses the first OT hour'],['false','No — treat OT the same for everyone']], String(ot.lateForfeitsFirstHour !== false)) +
+          '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited and OT is only counted in complete whole hours after that.</small>') +
         '</div>',
         '<button class="btn" id="saveOt">Save Overtime Policy</button>') +
       '<details class="advanced"><summary>⚙️ Advanced: government rate tables — most users can leave these alone</summary>' +
@@ -1713,6 +1716,7 @@
       ot.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
       ot.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
       ot.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
+      ot.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
       S.save();
       toast('Overtime policy saved.');
     });

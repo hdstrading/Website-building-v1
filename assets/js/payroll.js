@@ -65,7 +65,7 @@
       basicPay = round2(r.monthlyBasic / ppm);
       dtr = { regularPay: basicPay, overtimePay: 0, nightDiffPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
-        paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0,
+        paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0, leaveDays: [],
         regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
         lateMinutes: 0, undertimeMinutes: 0, details: [] };
     }
@@ -83,17 +83,40 @@
         amount: round2(dtr.holidayDaysUnworked * r.daily), taxable: true });
     }
 
-    // Service Incentive Leave: pay requested leave days, capped by remaining credits.
+    // Service Incentive Leave: pay requested leave days, capped by remaining
+    // credits. Each leave type (SL/VL/EL) shows on its own payslip line so the
+    // breakdown is transparent, kept separate from basic pay.
     var leaveRemaining = Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0));
-    var leaveDaysPaid = Math.min(dtr.leaveDaysRequested || 0, leaveRemaining);
-    if (leaveDaysPaid > 0) {
-      earnings.push({ name: 'Leave Pay (' + leaveDaysPaid + ' day' +
-        (leaveDaysPaid > 1 ? 's' : '') + ')',
-        amount: round2(leaveDaysPaid * r.daily), taxable: true });
+    var leaveList = dtr.leaveDays || [];
+    var paidByType = {};
+    var leaveDaysPaid = 0;
+    // Allocate paid days across leave types in the order they occur, up to
+    // the remaining credit balance. Days beyond credits are unpaid.
+    leaveList.forEach(function (ld) {
+      if (leaveDaysPaid < leaveRemaining) {
+        var t = ld.type || '';
+        paidByType[t] = (paidByType[t] || 0) + 1;
+        leaveDaysPaid++;
+      }
+    });
+    // Fall back to the aggregate count when per-day detail is unavailable
+    // (e.g. no-DTR stub or a legacy import without leaveDays).
+    if (!leaveList.length && (dtr.leaveDaysRequested || 0) > 0) {
+      leaveDaysPaid = Math.min(dtr.leaveDaysRequested || 0, leaveRemaining);
+      if (leaveDaysPaid > 0) paidByType[''] = leaveDaysPaid;
     }
+    var LEAVE_LABEL = { SL: 'Sick Leave', VL: 'Vacation Leave', EL: 'Emergency Leave', '': 'Leave' };
+    ['SL', 'VL', 'EL', ''].forEach(function (t) {
+      var n = paidByType[t];
+      if (!n) return;
+      earnings.push({ name: (LEAVE_LABEL[t] || 'Leave') + ' Pay (' + n + ' day' +
+        (n > 1 ? 's' : '') + ')',
+        amount: round2(n * r.daily), taxable: true, kind: 'leave' });
+    });
     var leaveInfo = {
-      requested: dtr.leaveDaysRequested || 0,
+      requested: dtr.leaveDaysRequested || leaveList.length || 0,
       paid: leaveDaysPaid,
+      byType: paidByType,
       creditsPerYear: emp.leaveCreditsPerYear || 0,
       remainingBefore: leaveRemaining,
       remainingAfter: leaveRemaining - leaveDaysPaid
