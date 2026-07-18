@@ -42,6 +42,14 @@ function saveCompanyData(data, expectedVersion) {
 function findEmpByCode(data, code) {
   return (data.employees || []).find(function (e) { return e.code === code; });
 }
+// Record an in-app notification for a user (best-effort; never throws to caller).
+function notify(userId, type, title, body) {
+  if (!userId) return;
+  try {
+    db.prepare('INSERT INTO notifications (user_id, type, title, body) VALUES (?, ?, ?, ?)')
+      .run(userId, type, title, body || '');
+  } catch (e) { console.error('notify failed', e.message); }
+}
 
 /* ---------- leave application window ----------
  * Governs when an employee may file leave. Shared rule (mirrored in the portal):
@@ -229,8 +237,12 @@ app.get('/api/admin/leave-requests', A.requireAdmin, (req, res) => {
 app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
   const { decision } = req.body || {}; // 'approved' | 'rejected'
   if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
+  const row = db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Leave request not found.' });
   db.prepare('UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
     .run(decision, req.user.id, req.params.id);
+  notify(row.user_id, 'leave', 'Leave ' + decision,
+    row.leave_type + ' leave for ' + row.date_from + (row.date_to !== row.date_from ? ' → ' + row.date_to : '') + ' was ' + decision + '.');
   res.json({ ok: true });
 });
 
@@ -254,6 +266,8 @@ app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
   if (decision === 'rejected') {
     db.prepare('UPDATE loan_requests SET status = \'rejected\', reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
       .run(req.user.id, reqRow.id);
+    notify(reqRow.user_id, 'loan', 'Loan application rejected',
+      (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') + ' was not approved.');
     return res.json({ ok: true });
   }
 
@@ -276,6 +290,9 @@ app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
   catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
   db.prepare('UPDATE loan_requests SET status = \'approved\', loan_id = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
     .run(loanId, req.user.id, reqRow.id);
+  notify(reqRow.user_id, 'loan', 'Loan application approved',
+    (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') +
+    ' approved — ₱' + Number(perMonth).toLocaleString('en-PH') + ' will be deducted each period.');
   res.json({ ok: true, loanId: loanId, companyVersion: version });
 });
 
@@ -299,13 +316,17 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
   if (!period) return res.status(404).json({ error: 'Period not found.' });
   const results = data.payrolls[periodId] || {};
   const base = baseUrl(req);
-  let sent = 0, skipped = 0;
+  let sent = 0, skipped = 0, notified = 0;
   const users = db.prepare("SELECT * FROM users WHERE role = 'employee' AND status = 'active' AND employee_code IS NOT NULL").all();
   for (const u of users) {
     const emp = findEmpByCode(data, u.employee_code);
     if (!emp || !results[emp.id]) continue;              // no payslip for them this period
-    if (!u.email) { skipped++; continue; }
     const net = results[emp.id].netPay;
+    // In-app notification is the reliable channel — always record it.
+    notify(u.id, 'payslip', 'Payslip ready',
+      'Your payslip for ' + period.name + ' is available. Net pay ₱' + Number(net).toLocaleString('en-PH', { minimumFractionDigits: 2 }) + '.');
+    notified++;
+    if (!u.email) { skipped++; continue; }
     try {
       const r = await mailer.sendMail({
         to: u.email,
@@ -319,7 +340,7 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
       if (r && r.skipped) skipped++; else sent++;
     } catch (e) { skipped++; }
   }
-  res.json({ ok: true, sent, skipped, emailConfigured: mailer.configured() });
+  res.json({ ok: true, sent, skipped, notified, emailConfigured: mailer.configured() });
 });
 
 /* ================= EMPLOYEE SELF-SERVICE ================= */
@@ -334,6 +355,19 @@ app.get('/api/me/profile', A.requireAuth, (req, res) => {
     loans: loans,
     company: data.meta.company
   });
+});
+
+/* ---- in-app notifications ---- */
+app.get('/api/me/notifications', A.requireAuth, (req, res) => {
+  const items = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);
+  const unread = db.prepare('SELECT COUNT(*) c FROM notifications WHERE user_id = ? AND is_read = 0').get(req.user.id).c;
+  res.json({ items: items, unread: unread });
+});
+app.post('/api/me/notifications/read', A.requireAuth, (req, res) => {
+  const id = req.body && req.body.id;
+  if (id) db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, req.user.id);
+  else db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').run(req.user.id);
+  res.json({ ok: true });
 });
 
 /* ---- loan applications (employee self-service) ---- */

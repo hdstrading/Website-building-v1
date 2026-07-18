@@ -3,18 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PH Payroll — Employee Portal</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₱</text></svg>">
+  <title>HDS Trading Payroll Solutions — Employee Portal</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%2317408b'/><rect x='17' y='47' width='30' height='5' rx='2.5' fill='%23e11d2a'/><text x='32' y='42' font-family='Arial' font-size='36' font-weight='bold' fill='%23fff' text-anchor='middle'>₱</text></svg>">
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f1f5f9; color: #1e293b; }
-    header { background: #0f2942; color: #fff; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; }
+    header { background: #0b2447; color: #fff; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     header .who { font-size: 14px; }
     header .who b { display: block; font-size: 16px; }
     .logout { background: rgba(255,255,255,.12); color: #fff; border: none; padding: 8px 14px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .hdr-right { display: flex; align-items: center; gap: 10px; }
+    .bell { position: relative; background: rgba(255,255,255,.12); color: #fff; border: none; width: 38px; height: 38px; border-radius: 8px; font-size: 16px; cursor: pointer; }
+    .bell-badge { position: absolute; top: -5px; right: -5px; background: #e11d2a; color: #fff; font-size: 10px; font-weight: 700; min-width: 17px; height: 17px; border-radius: 9px; padding: 0 4px; display: flex; align-items: center; justify-content: center; }
+    .npanel { position: fixed; right: 14px; top: 60px; width: 340px; max-width: calc(100vw - 28px); background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.22); z-index: 50; overflow: hidden; display: none; }
+    .npanel.open { display: block; }
+    .npanel h3 { margin: 0; font-size: 14px; padding: 12px 14px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
+    .npanel h3 a { text-decoration: none; }
+    .nitem { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; }
+    .nitem.unread { background: #eff6ff; }
+    .nitem b { font-size: 13px; display: block; }
+    .nitem p { margin: 2px 0 0; font-size: 12px; color: #475569; }
+    .nitem .nt { font-size: 10px; color: #94a3b8; margin-top: 2px; }
+    .ntoast { position: fixed; right: 16px; bottom: 16px; background: #0b2447; color: #fff; padding: 12px 16px; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.3); font-size: 13px; max-width: 300px; z-index: 100; animation: nfade .3s ease; }
+    @keyframes nfade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     nav.tabs { display: flex; gap: 4px; background: #0e2138; padding: 0 10px; overflow-x: auto; }
     nav.tabs a { color: #cbd5e1; padding: 12px 16px; text-decoration: none; font-weight: 600; font-size: 14px; white-space: nowrap; }
-    nav.tabs a.active { color: #fff; box-shadow: inset 0 -3px 0 #0891b2; }
+    nav.tabs a.active { color: #fff; box-shadow: inset 0 -3px 0 #e11d2a; }
     main { max-width: 900px; margin: 0 auto; padding: 18px; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-bottom: 16px; }
     .card h2 { margin: 0; font-size: 16px; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
@@ -25,7 +39,7 @@
     .num { text-align: right; }
     input, select, textarea { padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 7px; font-size: 13px; font-family: inherit; }
     label { font-size: 12px; color: #64748b; font-weight: 600; display: block; margin-bottom: 4px; }
-    .btn { background: #0e7490; color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
+    .btn { background: #17408b; color: #fff; border: none; padding: 9px 16px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
     .btn.sm { padding: 5px 10px; font-size: 12px; }
     .btn.ghost { background: #f1f5f9; color: #1e293b; border: 1px solid #e2e8f0; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
@@ -47,20 +61,37 @@
     .cal .dow { text-align: center; font-size: 11px; color: #94a3b8; font-weight: 700; padding: 4px 0; }
     .cal .cell { aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 13px; border: 1px solid transparent; }
     .cal .cell.day { background: #f8fafc; border-color: #e2e8f0; cursor: pointer; }
-    .cal .cell.day:hover { border-color: #0891b2; }
+    .cal .cell.day:hover { border-color: #2563eb; }
     .cal .cell.disabled { color: #cbd5e1; background: #fff; cursor: not-allowed; }
-    .cal .cell.sel { background: #0e7490; color: #fff; border-color: #0e7490; font-weight: 700; }
+    .cal .cell.sel { background: #17408b; color: #fff; border-color: #17408b; font-weight: 700; }
     .cal .cell.today { box-shadow: inset 0 0 0 2px #f59e0b; }
     .cal .cell.empty { background: transparent; }
     .legend { font-size: 12px; color: #64748b; margin: 8px 0; }
-    @media(max-width:640px){ .grid2 { grid-template-columns: 1fr; } }
+    @media(max-width:640px){
+      .grid2 { grid-template-columns: 1fr; }
+      header { padding: 12px 14px; }
+      header .who b { font-size: 15px; }
+      main { padding: 12px; }
+      .card .in { padding: 12px; }
+      .npanel { top: 56px; right: 8px; }
+      .cal .cell { font-size: 12px; }
+      table { font-size: 12px; }
+      th, td { padding: 6px 7px; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div class="who"><b id="whoName">—</b><span id="whoMeta" class="muted"></span></div>
-    <button class="logout" id="logout">Log out</button>
+    <div class="hdr-right">
+      <button class="bell" id="bell" aria-label="Notifications" title="Notifications">🔔<span class="bell-badge" id="bellBadge" hidden>0</span></button>
+      <button class="logout" id="logout">Log out</button>
+    </div>
   </header>
+  <div class="npanel" id="npanel">
+    <h3>Notifications <a href="#" id="nMarkAll" style="font-size:12px;color:#17408b">Mark all read</a></h3>
+    <div id="nList" style="max-height:60vh;overflow:auto"></div>
+  </div>
   <nav class="tabs">
     <a href="#" class="active" data-tab="profile">My 201</a>
     <a href="#" data-tab="dtr">My DTR</a>
@@ -82,6 +113,62 @@
     document.getElementById('logout').addEventListener('click', function () {
       api('/api/auth/logout', { method: 'POST' }).then(function () { location.href = '/'; });
     });
+
+    // ---- Notifications ----
+    var notif = { unread: 0, items: [], started: false };
+    function timeAgo(s) {
+      var d = new Date((s || '').replace(' ', 'T') + 'Z'), diff = (Date.now() - d.getTime()) / 1000;
+      if (isNaN(diff)) return '';
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+    var NICON = { payslip: '💵', leave: '🌴', loan: '💳' };
+    function renderNotifPanel() {
+      var el = document.getElementById('nList');
+      el.innerHTML = notif.items.length ? notif.items.map(function (n) {
+        return '<div class="nitem ' + (n.is_read ? '' : 'unread') + '"><b>' + (NICON[n.type] || '🔔') + ' ' + esc(n.title) + '</b>' +
+          '<p>' + esc(n.body) + '</p><div class="nt">' + timeAgo(n.created_at) + '</div></div>';
+      }).join('') : '<p class="muted" style="padding:14px">No notifications yet.</p>';
+    }
+    function setBadge(n) {
+      var b = document.getElementById('bellBadge');
+      if (n > 0) { b.textContent = n > 99 ? '99+' : n; b.hidden = false; } else { b.hidden = true; }
+    }
+    function toast(text) {
+      var t = document.createElement('div'); t.className = 'ntoast'; t.textContent = text;
+      document.body.appendChild(t); setTimeout(function () { t.remove(); }, 5000);
+    }
+    function pollNotifs() {
+      api('/api/me/notifications').then(function (r) {
+        if (!r.ok) return;
+        var prev = notif.unread;
+        notif.items = r.body.items || []; notif.unread = r.body.unread || 0;
+        setBadge(notif.unread);
+        if (notif.started && notif.unread > prev && notif.items[0]) toast(notif.items[0].title + ' — ' + notif.items[0].body);
+        notif.started = true;
+        if (document.getElementById('npanel').classList.contains('open')) renderNotifPanel();
+      });
+    }
+    document.getElementById('bell').addEventListener('click', function (e) {
+      e.stopPropagation();
+      var p = document.getElementById('npanel');
+      var opening = !p.classList.contains('open');
+      p.classList.toggle('open', opening);
+      if (opening) {
+        renderNotifPanel();
+        if (notif.unread > 0) api('/api/me/notifications/read', { method: 'POST', body: '{}' }).then(function () { notif.unread = 0; setBadge(0); notif.items.forEach(function (n) { n.is_read = 1; }); });
+      }
+    });
+    document.getElementById('nMarkAll').addEventListener('click', function (e) {
+      e.preventDefault();
+      api('/api/me/notifications/read', { method: 'POST', body: '{}' }).then(function () { notif.unread = 0; setBadge(0); notif.items.forEach(function (n) { n.is_read = 1; }); renderNotifPanel(); });
+    });
+    document.addEventListener('click', function (e) {
+      var p = document.getElementById('npanel');
+      if (p.classList.contains('open') && !p.contains(e.target) && e.target.id !== 'bell') p.classList.remove('open');
+    });
     document.querySelectorAll('nav.tabs a').forEach(function (a) {
       a.addEventListener('click', function (e) { e.preventDefault(); go(a.dataset.tab); });
     });
@@ -100,6 +187,8 @@
         var emp = p.body.employee;
         document.getElementById('whoMeta').textContent = emp ? (emp.position || '') + (emp.code ? ' • ' + emp.code : '') : 'Awaiting 201 link';
         go('profile');
+        pollNotifs();
+        setInterval(pollNotifs, 45000);
       });
     });
 
@@ -425,7 +514,7 @@
         '<tr><td><b>Gross</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></table></div>' +
         '<div><h3 style="font-size:14px;margin:0 0 6px">Deductions</h3><table>' + ded +
         '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
-        '<div style="margin-top:12px;background:#0f2942;color:#fff;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;font-weight:700"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div>' +
+        '<div style="margin-top:12px;background:#0b2447;color:#fff;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;font-weight:700"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div>' +
         '<button class="btn ghost sm" id="slipPrint" style="margin-top:12px">Print / Save PDF</button>' +
         '</div></div>';
       document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });

@@ -1,11 +1,12 @@
 /* ==========================================================================
- * styles.css — PH Payroll (Offline)
+ * styles.css — HDS Trading Payroll Solutions
+ * Brand palette: deep corporate blue + Ferrari red accent.
  * ========================================================================== */
 :root {
-  --bg: #0f172a; --panel: #ffffff; --ink: #1e293b; --muted: #64748b;
-  --line: #e2e8f0; --brand: #0e7490; --brand-2: #0891b2; --accent: #0d9488;
+  --bg: #0b2447; --panel: #ffffff; --ink: #1e293b; --muted: #64748b;
+  --line: #e2e8f0; --brand: #17408b; --brand-2: #2563eb; --accent: #e11d2a;
   --danger: #dc2626; --ok: #16a34a; --warn: #b45309;
-  --sidebar: #0f2942; --sidebar-ink: #cbd5e1;
+  --sidebar: #0b2447; --sidebar-ink: #cbd5e1;
   --radius: 10px; --shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.04);
 }
 * { box-sizing: border-box; }
@@ -23,10 +24,10 @@ body {
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 20px 18px; border-bottom: 1px solid rgba(255,255,255,.08); }
 .brand-mark {
-  width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center;
-  background: linear-gradient(135deg, var(--brand-2), var(--accent)); color: #fff;
-  font-weight: 800; font-size: 20px;
+  width: 38px; height: 38px; display: grid; place-items: center;
+  color: #fff; font-weight: 800; font-size: 20px;
 }
+.brand-mark svg { display: block; border-radius: 9px; }
 .brand-title { font-weight: 700; color: #fff; }
 .brand-sub { font-size: 11px; color: #7dd3fc; letter-spacing: .5px; }
 .sidebar nav { padding: 10px; flex: 1; overflow-y: auto; }
@@ -154,11 +155,24 @@ input[type=file] { padding: 6px; }
 /* ---- Responsive ---- */
 @media (max-width: 820px) {
   #app { flex-direction: column; }
-  .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; flex-wrap: wrap; }
-  .sidebar nav { display: flex; flex-wrap: wrap; }
+  .sidebar { width: 100%; height: auto; position: sticky; top: 0; z-index: 30; flex-direction: column; }
   .brand { width: 100%; }
+  .sidebar nav { display: flex; flex-wrap: nowrap; overflow-x: auto; padding: 8px; gap: 4px; -webkit-overflow-scrolling: touch; }
+  .nav-item { white-space: nowrap; margin: 0; }
+  .sidebar-foot { display: none; }
+  .main { padding: 16px 14px; max-width: 100%; }
   .grid2, .grid3 { grid-template-columns: 1fr; }
   .ps-cols { flex-direction: column; }
+  /* Wide tables scroll horizontally instead of breaking the layout. */
+  .card { overflow: visible; }
+  .card-body { overflow-x: auto; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+}
+@media (max-width: 480px) {
+  .stat-grid { grid-template-columns: 1fr; }
+  .main { padding: 12px 10px; }
+  .btn, .card-actions .btn { font-size: 13px; }
 }
 code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
