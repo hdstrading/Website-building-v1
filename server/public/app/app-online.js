@@ -48,7 +48,7 @@
     var ov = document.createElement('div');
     ov.className = 'acc-overlay';
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a></div>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="loans">Loan Requests</a></div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
     ov.querySelector('.acc-x').onclick = function () { ov.remove(); };
@@ -61,6 +61,7 @@
     function renderTab(tab) {
       body.innerHTML = 'Loading…';
       if (tab === 'leave') return api('/api/admin/leave-requests').then(function (r) { renderLeave(r.body.requests || []); });
+      if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
 
@@ -134,7 +135,50 @@
       function decide(lid, d) { api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('leave'); }); }
     }
 
+    function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function renderLoans(reqs) {
+      if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No loan applications.</p>'; return; }
+      body.innerHTML = '<p class="acc-muted">Approving a loan creates an auto-deducted payroll loan on the employee. Set the amount taken each pay period.</p>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Type</th><th>Amount</th><th>Per cutoff</th><th>Status</th><th></th></tr></thead><tbody>' +
+        reqs.map(function (x) {
+          var suggested = Math.round((x.amount / Math.max(1, x.installments)) * 100) / 100;
+          return '<tr data-lid="' + x.id + '"><td>' + esc(x.full_name || x.email) + '</td>' +
+            '<td>' + esc(x.loan_type_label || x.loan_type) + (x.reason ? '<div class="acc-muted">' + esc(x.reason) + '</div>' : '') + '</td>' +
+            '<td>' + peso(x.amount) + '<div class="acc-muted">' + esc(x.installments) + ' cutoff(s) requested</div></td>' +
+            '<td>' + (x.status === 'pending' ? '<input class="ln-amt" type="number" step="0.01" value="' + suggested + '" style="width:100px">' : (x.loan_id ? 'loan created' : '—')) + '</td>' +
+            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
+            '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn ln-ok">Approve</button><button class="acc-btn ghost ln-no">Reject</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      body.querySelectorAll('tr[data-lid]').forEach(function (tr) {
+        var lid = tr.dataset.lid;
+        var ok = tr.querySelector('.ln-ok'), no = tr.querySelector('.ln-no');
+        if (ok) ok.onclick = function () {
+          var amtEl = tr.querySelector('.ln-amt');
+          api('/api/admin/loan-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: 'approved', monthlyAmortization: amtEl ? amtEl.value : '' }) })
+            .then(function (r) {
+              if (!r.ok) { alert(r.body.error || 'Could not approve.'); return; }
+              refreshCompany();          // company data changed server-side (new payroll loan)
+              renderTab('loans');
+            });
+        };
+        if (no) no.onclick = function () {
+          api('/api/admin/loan-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: 'rejected' }) }).then(function () { renderTab('loans'); });
+        };
+      });
+    }
+
     renderTab('approvals');
+  }
+
+  // Reload company data after an admin action changed it server-side (e.g. loan
+  // approval created a payroll loan), so the in-app view and save version stay current.
+  function refreshCompany() {
+    return api('/api/company').then(function (c) {
+      if (!c.ok) return;
+      window.__COMPANY__ = { data: c.body.data, version: c.body.version, role: c.body.role };
+      PH.storage.load();
+      PH.ui.render();
+    });
   }
 
   // Called by the shared UI after a payroll is finalized (online only).

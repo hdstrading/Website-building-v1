@@ -43,6 +43,41 @@ function findEmpByCode(data, code) {
   return (data.employees || []).find(function (e) { return e.code === code; });
 }
 
+/* ---------- leave application window ----------
+ * Governs when an employee may file leave. Shared rule (mirrored in the portal):
+ *  - VL cannot be backdated.
+ *  - Current-month leave is always fileable.
+ *  - Next-month leave opens on `openDay` of the current month (or when the
+ *    superadmin flips `manualOpen`).
+ *  - Two or more months ahead: only when `manualOpen` is on.
+ *  - SL / EL may be backdated (unplanned absences).
+ */
+const LOAN_TYPES = {
+  cash_advance:    'Cash Advance',
+  product_advance: 'Product Advance',
+  sss_loan:        'SSS Loan',
+  pagibig_loan:    'Pag-IBIG Loan'
+};
+function leavePolicyOf(data) {
+  return (data.meta && data.meta.leavePolicy) || { manualOpen: false, openDay: 21 };
+}
+function ymIndex(d) { return d.getFullYear() * 12 + d.getMonth(); }
+function parseDateLocal(s) { const p = String(s).split('-'); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+function todayLocal() { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+function leaveDateAllowed(dateStr, type, policy, today) {
+  const d = parseDateLocal(dateStr);
+  if (isNaN(d.getTime())) return false;
+  const t0 = today || todayLocal();
+  const openDay = Number(policy && policy.openDay) || 21;
+  const manualOpen = !!(policy && policy.manualOpen);
+  if (type === 'VL' && d < t0) return false;           // no backdated vacation
+  const md = ymIndex(d) - ymIndex(t0);
+  if (md <= -1) return type === 'SL' || type === 'EL'; // backdated sick/emergency only
+  if (md === 0) return true;                           // current month
+  if (md === 1) return manualOpen || t0.getDate() >= openDay;
+  return manualOpen;                                   // 2+ months ahead
+}
+
 /* ================= AUTH ================= */
 app.post('/api/auth/register', (req, res) => {
   const { email, password, fullName, profile } = req.body || {};
@@ -199,6 +234,51 @@ app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---- loan applications (admin review) ---- */
+app.get('/api/admin/loan-requests', A.requireAdmin, (req, res) => {
+  const rows = db.prepare(
+    `SELECT lr.*, u.full_name, u.email FROM loan_requests lr JOIN users u ON u.id = lr.user_id
+     ORDER BY (lr.status = 'pending') DESC, lr.created_at DESC`
+  ).all();
+  res.json({ requests: rows.map(function (r) { return Object.assign(r, { loan_type_label: LOAN_TYPES[r.loan_type] || r.loan_type }); }) });
+});
+
+// Approve (creating a payroll loan that is auto-deducted) or reject a loan request.
+app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
+  const { decision, monthlyAmortization } = req.body || {};
+  if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
+  const reqRow = db.prepare('SELECT * FROM loan_requests WHERE id = ?').get(req.params.id);
+  if (!reqRow) return res.status(404).json({ error: 'Loan request not found.' });
+  if (reqRow.status !== 'pending') return res.status(400).json({ error: 'This request has already been decided.' });
+
+  if (decision === 'rejected') {
+    db.prepare('UPDATE loan_requests SET status = \'rejected\', reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
+      .run(req.user.id, reqRow.id);
+    return res.json({ ok: true });
+  }
+
+  // Approve: create the payroll loan on the linked employee so it deducts automatically.
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, reqRow.employee_code);
+  if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to this applicant yet — approve their account/201 first.' });
+  const perMonth = Number(monthlyAmortization) > 0
+    ? Number(monthlyAmortization)
+    : Math.round((reqRow.amount / Math.max(1, reqRow.installments)) * 100) / 100;
+  const loanId = 'loan_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  data.loans = data.loans || [];
+  data.loans.push({
+    id: loanId, employeeId: emp.id, type: LOAN_TYPES[reqRow.loan_type] || 'Loan',
+    principal: reqRow.amount, monthlyAmortization: perMonth, balance: reqRow.amount,
+    active: true, source: 'application', requestId: reqRow.id
+  });
+  let version;
+  try { version = saveCompanyData(data); }
+  catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+  db.prepare('UPDATE loan_requests SET status = \'approved\', loan_id = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
+    .run(loanId, req.user.id, reqRow.id);
+  res.json({ ok: true, loanId: loanId, companyVersion: version });
+});
+
 // Admin resets a user's password (provide one, or a random one is generated).
 app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -246,22 +326,62 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
 app.get('/api/me/profile', A.requireAuth, (req, res) => {
   const data = getCompanyData();
   const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+  const loans = emp ? (data.loans || []).filter(function (l) { return l.employeeId === emp.id; }) : [];
   res.json({
     user: A.publicUser(req.user),
     profile: JSON.parse(req.user.profile_json || '{}'),
     employee: emp || null,
+    loans: loans,
     company: data.meta.company
   });
+});
+
+/* ---- loan applications (employee self-service) ---- */
+app.get('/api/me/loans', A.requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM loan_requests WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+  res.json({ requests: rows });
+});
+app.post('/api/me/loans', A.requireAuth, (req, res) => {
+  const { loanType, amount, installments, reason } = req.body || {};
+  if (!LOAN_TYPES[loanType]) return res.status(400).json({ error: 'Choose a valid loan type.' });
+  const amt = Number(amount);
+  if (!(amt > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
+  const inst = Math.max(1, parseInt(installments, 10) || 1);
+  db.prepare(
+    `INSERT INTO loan_requests (user_id, employee_code, loan_type, amount, installments, reason)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(req.user.id, req.user.employee_code, loanType, amt, inst, reason || '');
+  res.json({ ok: true });
 });
 
 app.get('/api/me/leave', A.requireAuth, (req, res) => {
   const rows = db.prepare('SELECT * FROM leave_requests WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
   res.json({ requests: rows });
 });
+app.get('/api/me/leave-window', A.requireAuth, (req, res) => {
+  const pol = leavePolicyOf(getCompanyData());
+  const t = todayLocal();
+  res.json({
+    openDay: Number(pol.openDay) || 21,
+    manualOpen: !!pol.manualOpen,
+    serverDate: t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0')
+  });
+});
+
 app.post('/api/me/leave', A.requireAuth, (req, res) => {
   const { dateFrom, dateTo, leaveType, reason } = req.body || {};
   if (!dateFrom || !dateTo) return res.status(400).json({ error: 'Start and end dates are required.' });
+  if (dateTo < dateFrom) return res.status(400).json({ error: 'End date cannot be before the start date.' });
   const type = ['SL', 'VL', 'EL'].indexOf(leaveType) >= 0 ? leaveType : 'VL';
+  // Enforce the leave application window for employees (admins may file anytime).
+  if (['superadmin', 'admin_payroll'].indexOf(req.user.role) < 0) {
+    const pol = leavePolicyOf(getCompanyData());
+    if (!leaveDateAllowed(dateFrom, type, pol) || !leaveDateAllowed(dateTo, type, pol)) {
+      return res.status(400).json({ error: 'Leave filing for those dates is not open yet. ' +
+        (type === 'VL' ? 'Next-month leave opens on day ' + (Number(pol.openDay) || 21) + ' of the current month.' :
+          'Please pick eligible dates.') });
+    }
+  }
   db.prepare(
     `INSERT INTO leave_requests (user_id, employee_code, date_from, date_to, leave_type, reason)
      VALUES (?, ?, ?, ?, ?, ?)`

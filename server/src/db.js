@@ -60,6 +60,21 @@ CREATE TABLE IF NOT EXISTS dtr_submissions (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(user_id, period_id)
 );
+
+CREATE TABLE IF NOT EXISTS loan_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  loan_type TEXT NOT NULL,                         -- cash_advance | product_advance | sss_loan | pagibig_loan
+  amount REAL NOT NULL DEFAULT 0,
+  installments INTEGER NOT NULL DEFAULT 1,         -- number of pay-period deductions requested
+  reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',          -- pending | approved | rejected
+  loan_id TEXT,                                    -- id of the payroll loan created on approval
+  reviewed_by INTEGER,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 // Seed the single company row with an empty data document if missing.
@@ -68,7 +83,8 @@ function emptyCompanyData() {
     meta: {
       version: 1,
       company: { name: 'My Company', address: '', tin: '' },
-      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true }
+      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true },
+      leavePolicy: { manualOpen: false, openDay: 21 }
     },
     employees: [], allowances: [], loans: [], periods: [],
     dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, statutoryConfig: null
