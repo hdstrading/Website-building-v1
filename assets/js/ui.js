@@ -4,6 +4,12 @@
 (function (PH) {
   'use strict';
 
+  // Brand mark: deep-blue badge, Ferrari-red accent bar, white peso glyph.
+  PH.BRAND_SVG = "<svg viewBox='0 0 64 64' width='38' height='38' aria-hidden='true'>" +
+    "<rect width='64' height='64' rx='14' fill='#17408b'/>" +
+    "<rect x='17' y='47' width='30' height='5' rx='2.5' fill='#e11d2a'/>" +
+    "<text x='32' y='42' font-family='Arial,Helvetica,sans-serif' font-size='36' font-weight='bold' fill='#fff' text-anchor='middle'>₱</text></svg>";
+
   var S = PH.storage;
   var money = function (n) {
     n = n || 0;
@@ -40,9 +46,9 @@
     var app = qs('#app');
     app.innerHTML =
       '<aside class="sidebar">' +
-        '<div class="brand"><span class="brand-mark">₱</span>' +
-          '<div><div class="brand-title">PH Payroll</div>' +
-          '<div class="brand-sub">Offline Edition</div></div></div>' +
+        '<div class="brand"><span class="brand-mark">' + PH.BRAND_SVG + '</span>' +
+          '<div><div class="brand-title">HDS Trading</div>' +
+          '<div class="brand-sub">Payroll Solutions</div></div></div>' +
         '<nav>' + VIEWS.map(function (v) {
           return '<a href="#" class="nav-item ' + (state.view === v[0] ? 'active' : '') +
             '" data-nav="' + v[0] + '"><span class="nav-ico">' + v[2] + '</span>' + v[1] + '</a>';

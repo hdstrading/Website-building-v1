@@ -3,20 +3,21 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PH Payroll — Choose Mode</title>
+  <title>HDS Trading Payroll Solutions — Choose Mode</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: linear-gradient(135deg, #0e7490, #0f2942); min-height: 100vh; display: grid; place-items: center; padding: 22px; color: #1e293b; }
+      background: linear-gradient(135deg, #17408b, #0b2447); min-height: 100vh; display: grid; place-items: center; padding: 22px; color: #1e293b; }
     .card { background: #fff; width: 100%; max-width: 440px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.25); padding: 26px 24px; }
-    .mark { width: 52px; height: 52px; border-radius: 12px; display: grid; place-items: center; background: linear-gradient(135deg, #0891b2, #0d9488); color: #fff; font-size: 28px; font-weight: 800; margin: 0 auto 10px; }
+    .mark { width: 56px; height: 56px; display: grid; place-items: center; margin: 0 auto 10px; }
+    .mark svg { display: block; }
     h1 { font-size: 20px; text-align: center; margin: 0 0 4px; }
     p.sub { text-align: center; color: #64748b; font-size: 13px; margin: 0 0 18px; }
     label { display: block; font-size: 12px; font-weight: 600; color: #64748b; margin: 14px 0 5px; }
     input { width: 100%; padding: 11px 12px; border: 1px solid #e2e8f0; border-radius: 9px; font-size: 15px; }
-    input:focus { outline: 2px solid #0891b2; border-color: #0891b2; }
+    input:focus { outline: 2px solid #2563eb; border-color: #2563eb; }
     .btn { width: 100%; margin-top: 14px; padding: 12px; border: none; border-radius: 9px; font-size: 15px; font-weight: 700; cursor: pointer; }
-    .primary { background: #0e7490; color: #fff; }
+    .primary { background: #17408b; color: #fff; }
     .ghost { background: #f1f5f9; color: #1e293b; border: 1px solid #e2e8f0; }
     .hint { font-size: 12px; color: #94a3b8; margin-top: 6px; }
     .divider { text-align: center; color: #cbd5e1; font-size: 12px; margin: 16px 0 4px; }
@@ -25,8 +26,8 @@
 </head>
 <body>
   <div class="card">
-    <div class="mark">₱</div>
-    <h1>PH Payroll</h1>
+    <div class="mark"><svg viewBox="0 0 64 64" width="56" height="56" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#17408b"/><rect x="17" y="47" width="30" height="5" rx="2.5" fill="#e11d2a"/><text x="32" y="42" font-family="Arial,Helvetica,sans-serif" font-size="36" font-weight="bold" fill="#fff" text-anchor="middle">₱</text></svg></div>
+    <h1>HDS Trading Payroll Solutions</h1>
     <p class="sub">Connect to your company's online server, or use the app offline on this device.</p>
 
     <label>Server address</label>
