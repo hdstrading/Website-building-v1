@@ -273,7 +273,11 @@ app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
 
   // Approve: create the payroll loan on the linked employee so it deducts automatically.
   const data = getCompanyData();
-  const emp = findEmpByCode(data, reqRow.employee_code);
+  // Prefer the request's stored code, but fall back to the applicant's current
+  // employee_code — the 201 may have been linked after they applied.
+  const applicant = db.prepare('SELECT employee_code FROM users WHERE id = ?').get(reqRow.user_id);
+  const empCode = reqRow.employee_code || (applicant && applicant.employee_code);
+  const emp = findEmpByCode(data, empCode);
   if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to this applicant yet — approve their account/201 first.' });
   const perMonth = Number(monthlyAmortization) > 0
     ? Number(monthlyAmortization)
