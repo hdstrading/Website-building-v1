@@ -1626,6 +1626,7 @@
     var c = PH.statutory.config;
     var comp = S.db.meta.company;
     var ot = S.db.meta.overtime || (S.db.meta.overtime = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 });
+    var lp = S.db.meta.leavePolicy || (S.db.meta.leavePolicy = { manualOpen: false, openDay: 21 });
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
@@ -1657,8 +1658,22 @@
         field('Grace / rounding threshold (minutes)',
           '<input id="otGrace" type="number" value="' + (ot.graceMinutes != null ? ot.graceMinutes : 5) + '">' +
           '<small class="hint">Within this many minutes of a block, round up. e.g. 5 → clock-out 5:58 counts as 6:00 (1 hour).</small>') +
+        field('Late employees forfeit first OT hour',
+          select('otLateForfeit', [['true','Yes — a late employee loses the first OT hour'],['false','No — treat OT the same for everyone']], String(ot.lateForfeitsFirstHour !== false)) +
+          '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited and OT is only counted in complete whole hours after that.</small>') +
         '</div>',
         '<button class="btn" id="saveOt">Save Overtime Policy</button>') +
+      card('Leave Application Window',
+        '<p class="muted">Controls when employees can file leave from the portal. Sick and Emergency leave can always be filed (including recent past days); this window governs planned (Vacation) leave for future months.</p>' +
+        '<div class="grid2">' +
+        field('Next-month filing opens on day',
+          '<input id="lpOpenDay" type="number" min="1" max="28" value="' + (lp.openDay != null ? lp.openDay : 21) + '">' +
+          '<small class="hint">Employees can file next month\'s leave only from this day of the current month onward. e.g. 21 → leave for next month opens on the 21st.</small>') +
+        field('Open filing now (override)',
+          select('lpManual', [['false','No — follow the day rule above'],['true','Yes — open future-month filing immediately']], String(!!lp.manualOpen)) +
+          '<small class="hint">Turn on to let employees file leave for any upcoming month right away, ignoring the day rule.</small>') +
+        '</div>',
+        '<button class="btn" id="saveLp">Save Leave Window</button>') +
       '<details class="advanced"><summary>⚙️ Advanced: government rate tables — most users can leave these alone</summary>' +
         '<div class="advanced-body">' +
         '<p class="disclaimer">These are already set to the latest Philippine government rates (2025). ' +
@@ -1713,8 +1728,16 @@
       ot.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
       ot.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
       ot.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
+      ot.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
       S.save();
       toast('Overtime policy saved.');
+    });
+    v.querySelector('#saveLp').addEventListener('click', function () {
+      var day = parseInt(v.querySelector('#lpOpenDay').value, 10);
+      lp.openDay = (day >= 1 && day <= 28) ? day : 21;
+      lp.manualOpen = v.querySelector('[name=lpManual]').value === 'true';
+      S.save();
+      toast('Leave application window saved.');
     });
     v.querySelector('#saveCfg').addEventListener('click', function () {
       v.querySelectorAll('[data-cfg]').forEach(function (inp) {

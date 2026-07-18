@@ -38,6 +38,21 @@
     .msg { font-size: 13px; margin-top: 10px; }
     .msg.ok { color: #15803d; } .msg.err { color: #b91c1c; }
     .scroll { overflow-x: auto; }
+    /* Leave calendar */
+    .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .cal-head b { font-size: 15px; }
+    .cal-nav { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 7px; padding: 4px 12px; cursor: pointer; font-size: 16px; font-weight: 700; }
+    .cal-nav:disabled { opacity: .4; cursor: not-allowed; }
+    .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .cal .dow { text-align: center; font-size: 11px; color: #94a3b8; font-weight: 700; padding: 4px 0; }
+    .cal .cell { aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-size: 13px; border: 1px solid transparent; }
+    .cal .cell.day { background: #f8fafc; border-color: #e2e8f0; cursor: pointer; }
+    .cal .cell.day:hover { border-color: #0891b2; }
+    .cal .cell.disabled { color: #cbd5e1; background: #fff; cursor: not-allowed; }
+    .cal .cell.sel { background: #0e7490; color: #fff; border-color: #0e7490; font-weight: 700; }
+    .cal .cell.today { box-shadow: inset 0 0 0 2px #f59e0b; }
+    .cal .cell.empty { background: transparent; }
+    .legend { font-size: 12px; color: #64748b; margin: 8px 0; }
     @media(max-width:640px){ .grid2 { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -50,6 +65,7 @@
     <a href="#" class="active" data-tab="profile">My 201</a>
     <a href="#" data-tab="dtr">My DTR</a>
     <a href="#" data-tab="leave">File Leave</a>
+    <a href="#" data-tab="loans">Loans</a>
     <a href="#" data-tab="payslips">My Payslips</a>
   </nav>
   <main id="view"></main>
@@ -71,7 +87,7 @@
     });
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
-      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, payslips: viewPayslips })[tab]();
+      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, loans: viewLoans, payslips: viewPayslips })[tab]();
     }
 
     // ---- bootstrap ----
@@ -173,29 +189,117 @@
       });
     }
 
-    // ---- File Leave ----
+    // ---- File Leave (calendar) ----
+    // Shared window rule — MUST mirror server/src/index.js leaveDateAllowed().
+    function ymIndex(y, m) { return y * 12 + m; }
+    function leaveAllowed(dateObj, type, win, todayObj) {
+      var openDay = Number(win.openDay) || 21, manualOpen = !!win.manualOpen;
+      var d0 = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+      if (type === 'VL' && d0 < todayObj) return false;               // no backdated vacation
+      var md = ymIndex(d0.getFullYear(), d0.getMonth()) - ymIndex(todayObj.getFullYear(), todayObj.getMonth());
+      if (md <= -1) return type === 'SL' || type === 'EL';            // backdated sick/emergency only
+      if (md === 0) return true;                                       // current month
+      if (md === 1) return manualOpen || todayObj.getDate() >= openDay;
+      return manualOpen;                                               // 2+ months ahead
+    }
+    var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    var leaveState = { month: null, sel: {}, win: { openDay: 21, manualOpen: false }, today: new Date() };
+
     function viewLeave() {
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>File a Leave Request</h2><div class="in">' +
-        '<div class="grid2">' +
-        '<div><label>From</label><input id="lFrom" type="date"></div>' +
-        '<div><label>To</label><input id="lTo" type="date"></div>' +
-        '<div><label>Type</label><select id="lType"><option value="VL">Vacation (VL)</option><option value="SL">Sick (SL)</option><option value="EL">Emergency (EL)</option></select></div>' +
-        '</div><label style="margin-top:10px">Reason</label><textarea id="lReason" rows="2" style="width:100%"></textarea>' +
-        '<button class="btn" id="lSubmit" style="margin-top:12px">Submit Request</button><span id="lMsg" class="msg"></span>' +
+        '<label>Leave type</label><select id="lType" style="max-width:260px">' +
+        '<option value="VL">Vacation Leave (VL)</option><option value="SL">Sick Leave (SL)</option><option value="EL">Emergency Leave (EL)</option></select>' +
+        '<div id="calWrap" style="margin-top:14px"></div>' +
+        '<div class="legend" id="calNote"></div>' +
+        '<label style="margin-top:6px">Reason</label><textarea id="lReason" rows="2" style="width:100%"></textarea>' +
+        '<div id="selSummary" class="legend"></div>' +
+        '<button class="btn" id="lSubmit" style="margin-top:8px">Submit Request</button><span id="lMsg" class="msg"></span>' +
         '</div></div><div class="card"><h2>My Leave Requests</h2><div class="in scroll" id="lList">Loading…</div></div>';
-      document.getElementById('lSubmit').addEventListener('click', function () {
-        var payload = { dateFrom: document.getElementById('lFrom').value, dateTo: document.getElementById('lTo').value,
-          leaveType: document.getElementById('lType').value, reason: document.getElementById('lReason').value };
-        var m = document.getElementById('lMsg');
-        if (!payload.dateFrom || !payload.dateTo) { m.textContent = '  Choose dates.'; m.className = 'msg err'; return; }
-        api('/api/me/leave', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
-          m.textContent = res.ok ? '  ✓ Submitted' : ('  ' + (res.body.error || 'Failed'));
-          m.className = 'msg ' + (res.ok ? 'ok' : 'err');
-          if (res.ok) { document.getElementById('lReason').value = ''; loadLeaveList(); }
-        });
+      leaveState.sel = {};
+      api('/api/me/leave-window').then(function (r) {
+        if (r.ok && r.body) {
+          leaveState.win = { openDay: r.body.openDay, manualOpen: r.body.manualOpen };
+          if (r.body.serverDate) { var p = r.body.serverDate.split('-'); leaveState.today = new Date(+p[0], +p[1] - 1, +p[2]); }
+        }
+        var t = leaveState.today;
+        leaveState.month = new Date(t.getFullYear(), t.getMonth(), 1);
+        document.getElementById('lType').addEventListener('change', function () { leaveState.sel = {}; renderCal(); });
+        renderCal();
       });
+      document.getElementById('lSubmit').addEventListener('click', submitLeave);
       loadLeaveList();
+    }
+
+    function renderCal() {
+      var m = leaveState.month, type = document.getElementById('lType').value;
+      var win = leaveState.win, today = leaveState.today;
+      var first = new Date(m.getFullYear(), m.getMonth(), 1);
+      var daysIn = new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate();
+      // Disable going before the current month.
+      var atMinMonth = (m.getFullYear() === today.getFullYear() && m.getMonth() === today.getMonth());
+      var cells = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(function (d) { return '<div class="dow">' + d + '</div>'; });
+      for (var i = 0; i < first.getDay(); i++) cells.push('<div class="cell empty"></div>');
+      for (var day = 1; day <= daysIn; day++) {
+        var dObj = new Date(m.getFullYear(), m.getMonth(), day);
+        var iso = dObj.getFullYear() + '-' + pad2(dObj.getMonth() + 1) + '-' + pad2(dObj.getDate());
+        var ok = leaveAllowed(dObj, type, win, today);
+        var isToday = (dObj.getTime() === today.getTime());
+        var cls = 'cell ' + (ok ? 'day' : 'disabled') + (leaveState.sel[iso] ? ' sel' : '') + (isToday ? ' today' : '');
+        cells.push('<div class="' + cls + '"' + (ok ? ' data-iso="' + iso + '"' : '') + '>' + day + '</div>');
+      }
+      document.getElementById('calWrap').innerHTML =
+        '<div class="cal-head"><button class="cal-nav" id="calPrev"' + (atMinMonth ? ' disabled' : '') + '>‹</button>' +
+        '<b>' + MONTHS[m.getMonth()] + ' ' + m.getFullYear() + '</b>' +
+        '<button class="cal-nav" id="calNext">›</button></div>' +
+        '<div class="cal">' + cells.join('') + '</div>';
+      var openInfo = win.manualOpen ? 'Filing is currently open for future months.'
+        : 'Next-month leave opens on day ' + (win.openDay || 21) + ' of the current month. Sick/Emergency leave can be filed anytime.';
+      document.getElementById('calNote').textContent = openInfo;
+      var prev = document.getElementById('calPrev'), next = document.getElementById('calNext');
+      if (prev) prev.onclick = function () { leaveState.month = new Date(m.getFullYear(), m.getMonth() - 1, 1); renderCal(); };
+      next.onclick = function () { leaveState.month = new Date(m.getFullYear(), m.getMonth() + 1, 1); renderCal(); };
+      document.querySelectorAll('#calWrap .cell.day').forEach(function (c) {
+        c.onclick = function () { var iso = c.dataset.iso; if (leaveState.sel[iso]) delete leaveState.sel[iso]; else leaveState.sel[iso] = true; renderCal(); updateSel(); };
+      });
+      updateSel();
+    }
+    function selectedDates() { return Object.keys(leaveState.sel).sort(); }
+    function updateSel() {
+      var d = selectedDates();
+      document.getElementById('selSummary').textContent = d.length ? ('Selected: ' + d.length + ' day' + (d.length > 1 ? 's' : '') + ' (' + d[0] + (d.length > 1 ? ' … ' + d[d.length - 1] : '') + ')') : 'Tap the days you want off.';
+    }
+    // Group selected ISO dates into contiguous ranges.
+    function contiguousRanges(dates) {
+      var ranges = [], start = null, prev = null;
+      dates.forEach(function (iso) {
+        var d = new Date(iso + 'T00:00:00');
+        if (start === null) { start = iso; prev = d; return; }
+        var gap = (d - prev) / 86400000;
+        if (gap === 1) { prev = d; return; }
+        ranges.push([start, prev.getFullYear() + '-' + pad2(prev.getMonth() + 1) + '-' + pad2(prev.getDate())]);
+        start = iso; prev = d;
+      });
+      if (start !== null) ranges.push([start, prev.getFullYear() + '-' + pad2(prev.getMonth() + 1) + '-' + pad2(prev.getDate())]);
+      return ranges;
+    }
+    function submitLeave() {
+      var m = document.getElementById('lMsg'), type = document.getElementById('lType').value;
+      var reason = document.getElementById('lReason').value;
+      var dates = selectedDates();
+      if (!dates.length) { m.textContent = '  Pick at least one day.'; m.className = 'msg err'; return; }
+      var ranges = contiguousRanges(dates);
+      var btn = document.getElementById('lSubmit'); btn.disabled = true;
+      Promise.all(ranges.map(function (rg) {
+        return api('/api/me/leave', { method: 'POST', body: JSON.stringify({ dateFrom: rg[0], dateTo: rg[1], leaveType: type, reason: reason }) });
+      })).then(function (results) {
+        btn.disabled = false;
+        var bad = results.filter(function (r) { return !r.ok; });
+        if (bad.length) { m.textContent = '  ' + (bad[0].body.error || 'Some requests failed.'); m.className = 'msg err'; }
+        else { m.textContent = '  ✓ ' + ranges.length + ' request' + (ranges.length > 1 ? 's' : '') + ' submitted'; m.className = 'msg ok';
+          leaveState.sel = {}; document.getElementById('lReason').value = ''; renderCal(); }
+        loadLeaveList();
+      });
     }
     function loadLeaveList() {
       api('/api/me/leave').then(function (r) {
@@ -206,6 +310,61 @@
         document.getElementById('lList').innerHTML = rows
           ? '<table><thead><tr><th>Dates</th><th>Type</th><th>Reason</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<p class="muted">No requests yet.</p>';
+      });
+    }
+
+    // ---- Loans ----
+    var LOAN_TYPES = [['cash_advance','Cash Advance'],['product_advance','Product Advance'],['sss_loan','SSS Loan'],['pagibig_loan','Pag-IBIG Loan']];
+    var LOAN_LABEL = {}; LOAN_TYPES.forEach(function (t) { LOAN_LABEL[t[0]] = t[1]; });
+    function viewLoans() {
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Apply for a Loan / Cash Advance</h2><div class="in">' +
+        '<div class="grid2">' +
+        '<div><label>Type</label><select id="lnType">' + LOAN_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div><label>Amount (₱)</label><input id="lnAmount" type="number" min="0" step="0.01" placeholder="0.00"></div>' +
+        '<div><label>Preferred number of pay-period deductions</label><input id="lnInst" type="number" min="1" step="1" value="1"></div>' +
+        '</div><label style="margin-top:10px">Reason / notes</label><textarea id="lnReason" rows="2" style="width:100%"></textarea>' +
+        '<button class="btn" id="lnSubmit" style="margin-top:12px">Submit Application</button><span id="lnMsg" class="msg"></span>' +
+        '</div></div>' +
+        '<div class="card"><h2>My Active Loans</h2><div class="in scroll" id="lnActive">Loading…</div></div>' +
+        '<div class="card"><h2>My Loan Applications</h2><div class="in scroll" id="lnList">Loading…</div></div>';
+      document.getElementById('lnSubmit').addEventListener('click', function () {
+        var m = document.getElementById('lnMsg');
+        var payload = { loanType: document.getElementById('lnType').value,
+          amount: document.getElementById('lnAmount').value,
+          installments: document.getElementById('lnInst').value,
+          reason: document.getElementById('lnReason').value };
+        if (!(Number(payload.amount) > 0)) { m.textContent = '  Enter an amount.'; m.className = 'msg err'; return; }
+        api('/api/me/loans', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
+          m.textContent = res.ok ? '  ✓ Submitted for approval' : ('  ' + (res.body.error || 'Failed'));
+          m.className = 'msg ' + (res.ok ? 'ok' : 'err');
+          if (res.ok) { document.getElementById('lnAmount').value = ''; document.getElementById('lnReason').value = ''; loadLoans(); }
+        });
+      });
+      loadActiveLoans();
+      loadLoans();
+    }
+    function loadActiveLoans() {
+      api('/api/me/profile').then(function (r) {
+        var loans = ((r.body || {}).loans || []).filter(function (l) { return l.active !== false; });
+        var rows = loans.map(function (l) {
+          return '<tr><td>' + esc(l.type || '') + '</td><td class="num">' + peso(l.principal) + '</td><td class="num">' + peso(l.monthlyAmortization) + '</td><td class="num">' + peso(l.balance) + '</td></tr>';
+        }).join('');
+        document.getElementById('lnActive').innerHTML = rows
+          ? '<table><thead><tr><th>Loan</th><th class="num">Principal</th><th class="num">Monthly</th><th class="num">Balance</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<p class="muted">No active loans.</p>';
+      });
+    }
+    function loadLoans() {
+      api('/api/me/loans').then(function (r) {
+        var rows = (r.body.requests || []).map(function (x) {
+          return '<tr><td>' + esc(LOAN_LABEL[x.loan_type] || x.loan_type) + '</td><td class="num">' + peso(x.amount) +
+            '</td><td class="num">' + esc(x.installments) + '</td><td>' + esc(x.reason || '') +
+            '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td></tr>';
+        }).join('');
+        document.getElementById('lnList').innerHTML = rows
+          ? '<table><thead><tr><th>Type</th><th class="num">Amount</th><th class="num">Cutoffs</th><th>Reason</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<p class="muted">No applications yet.</p>';
       });
     }
 

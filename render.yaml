@@ -1,13 +1,18 @@
 # Render.com blueprint — one-click deploy of the online PH Payroll server.
 # In Render: New > Blueprint, point at this repo. Set SUPERADMIN_EMAIL and
 # SUPERADMIN_PASSWORD when prompted; JWT_SECRET is generated automatically.
+#
+# NOTE: the "starter" plan is required (not "free") because payroll data is
+# stored on the persistent disk below, and Render only allows a disk on a paid
+# instance. The free plan has no disk, so it would wipe all employee/payroll
+# data on every restart or redeploy — not safe for a real payroll system.
 services:
   - type: web
     name: ph-payroll
     runtime: docker
     dockerfilePath: ./server/Dockerfile
     dockerContext: .
-    plan: free
+    plan: starter
     envVars:
       - key: JWT_SECRET
         generateValue: true

@@ -15,7 +15,11 @@
         version: 1,
         company: { name: 'My Company', address: '', tin: '' },
         // Company overtime policy (editable in Settings).
-        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 }
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true },
+        // Leave application window (who can file leave, and when).
+        //  openDay     — day of month from which next month's leave may be filed
+        //  manualOpen  — superadmin master switch to open filing for any future month
+        leavePolicy: { manualOpen: false, openDay: 21 }
       },
       employees: [],
       allowances: [],   // recurring earnings tied to an employee
@@ -43,6 +47,8 @@
     // Migrate older saved data that predates newer settings.
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
+    if (db.meta.overtime.lateForfeitsFirstHour === undefined) db.meta.overtime.lateForfeitsFirstHour = true;
+    if (!db.meta.leavePolicy) db.meta.leavePolicy = emptyDB().meta.leavePolicy;
     if (!db.thirteenthMonth) db.thirteenthMonth = {};
     return db;
   }
