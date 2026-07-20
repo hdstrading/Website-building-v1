@@ -1299,6 +1299,8 @@
   }
   // Sum finalized "Basic Pay" earned by an employee within a calendar year.
   function basicEarnedFromHistory(empId, year) {
+    var pol = (S.db.meta && S.db.meta.thirteenthPolicy) || {};
+    var deductTardy = pol.deductTardiness !== false; // default: deduct
     var total = 0;
     S.list('periods').forEach(function (p) {
       if (periodYear(p) !== year) return;
@@ -1307,8 +1309,13 @@
       (run.earnings || []).forEach(function (e) {
         if (/^Basic Pay/.test(e.name)) total += e.amount;
       });
+      // Absences already lower Basic Pay; also net out tardiness & undertime
+      // (time not worked) when the policy calls for it.
+      if (deductTardy && run.dtr) {
+        total -= (run.dtr.lateDeduction || 0) + (run.dtr.undertimeDeduction || 0);
+      }
     });
-    return PH.statutory.round2(total);
+    return PH.statutory.round2(Math.max(0, total));
   }
 
   function viewThirteenth(v) {
@@ -1344,6 +1351,9 @@
         '<p class="muted">13th month pay = <b>total basic salary earned in the year ÷ 12</b> (excludes overtime, ' +
         'holiday pay, night differential and allowances). Basic earned is pulled from finalized payrolls for the ' +
         'selected year and can be edited. Amounts up to ₱90,000 (combined with other bonuses) are tax-exempt.</p>' +
+        '<p class="sub">Basic earned is net of absences' +
+        (((S.db.meta.thirteenthPolicy || {}).deductTardiness !== false) ? ', tardiness and undertime' : '') +
+        '. Change this in Settings → 13th Month Pay Policy.</p>' +
         '<div class="inline"><label class="fld" style="max-width:160px"><span class="fld-label">Year</span>' +
         select('t13year', yearList.map(function (y) { return [String(y), String(y)]; }), String(year)) + '</label></div>' +
         (emps.length ?
@@ -1655,6 +1665,7 @@
     var comp = S.db.meta.company;
     var ot = S.db.meta.overtime || (S.db.meta.overtime = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 });
     var lp = S.db.meta.leavePolicy || (S.db.meta.leavePolicy = { manualOpen: false, openDay: 21 });
+    var t13 = S.db.meta.thirteenthPolicy || (S.db.meta.thirteenthPolicy = { deductTardiness: true });
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
@@ -1702,6 +1713,12 @@
           '<small class="hint">Turn on to let employees file leave for any upcoming month right away, ignoring the day rule.</small>') +
         '</div>',
         '<button class="btn" id="saveLp">Save Leave Window</button>') +
+      card('13th Month Pay Policy',
+        '<p class="muted">The 13th-month base is the total Basic Pay earned for the year. Absences already lower it. This setting decides whether tardiness and undertime (time not worked) are also netted out.</p>' +
+        field('Deduct tardiness & undertime from the 13th-month base',
+          select('t13Tardy', [['true','Yes — net out tardiness & undertime'],['false','No — ignore tardiness & undertime']], String(t13.deductTardiness !== false)) +
+          '<small class="hint">Following DOLE, 13th-month pay is based on basic salary actually earned. Turn off only if your company chooses not to deduct tardiness/undertime.</small>') ,
+        '<button class="btn" id="saveT13">Save 13th Month Policy</button>') +
       '<details class="advanced"><summary>⚙️ Advanced: government rate tables — most users can leave these alone</summary>' +
         '<div class="advanced-body">' +
         '<p class="disclaimer">These are already set to the latest Philippine government rates (2025). ' +
@@ -1766,6 +1783,11 @@
       lp.manualOpen = v.querySelector('[name=lpManual]').value === 'true';
       S.save();
       toast('Leave application window saved.');
+    });
+    v.querySelector('#saveT13').addEventListener('click', function () {
+      t13.deductTardiness = v.querySelector('[name=t13Tardy]').value === 'true';
+      S.save();
+      toast('13th month pay policy saved.');
     });
     v.querySelector('#saveCfg').addEventListener('click', function () {
       v.querySelectorAll('[data-cfg]').forEach(function (inp) {
