@@ -67,6 +67,36 @@ const LOAN_TYPES = {
   pagibig_loan:    'Pag-IBIG Loan'
 };
 const OT_REASONS = { production: 'Production', delivery: 'Delivery', collection: 'Collection' };
+const ADVANCE_TYPES = { cash_advance: true, product_advance: true }; // cleared within the month
+
+function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+// Monthly basic salary (mirrors assets/js/payroll.js rates()).
+function monthlyBasicOf(emp) {
+  const factor = emp.dailyRateFactor || 313;
+  if (emp.employmentType === 'daily') return round2((emp.basicSalary || 0) * factor / 12);
+  if (emp.employmentType === 'hourly') return round2((emp.basicSalary || 0) * 8 * factor / 12);
+  return emp.basicSalary || 0; // monthly
+}
+// Sum of an employee's outstanding (active) cash-advance loan balances.
+function outstandingCashAdvance(data, emp) {
+  return (data.loans || []).filter(function (l) {
+    return l.employeeId === emp.id && l.active !== false &&
+      (l.loanType === 'cash_advance' || /cash advance/i.test(l.type || ''));
+  }).reduce(function (s, l) { return s + (l.balance || 0); }, 0);
+}
+// Pending (not yet approved) cash-advance request amounts for a user.
+function pendingCashAdvanceAmount(userId) {
+  const row = db.prepare("SELECT COALESCE(SUM(amount),0) t FROM loan_requests WHERE user_id = ? AND loan_type = 'cash_advance' AND status = 'pending'").get(userId);
+  return row ? row.t : 0;
+}
+// Cash-advance headroom for an employee: half of monthly basic, less what's used.
+function cashAdvanceInfo(data, emp, userId) {
+  const cap = round2(monthlyBasicOf(emp) / 2);
+  const outstanding = round2(outstandingCashAdvance(data, emp));
+  const pending = round2(pendingCashAdvanceAmount(userId));
+  return { monthlyBasic: monthlyBasicOf(emp), cap: cap, outstanding: outstanding, pending: pending,
+    available: round2(Math.max(0, cap - outstanding - pending)) };
+}
 
 /* ---------- overtime authorization computation ----------
  * Mirrors assets/js/dtr.js applyOtRules so filed OT is credited exactly like
@@ -380,16 +410,27 @@ app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
   const empCode = reqRow.employee_code || (applicant && applicant.employee_code);
   const emp = findEmpByCode(data, empCode);
   if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to this applicant yet — approve their account/201 first.' });
-  const perMonth = Number(monthlyAmortization) > 0
-    ? Number(monthlyAmortization)
-    : Math.round((reqRow.amount / Math.max(1, reqRow.installments)) * 100) / 100;
   const loanId = 'loan_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   data.loans = data.loans || [];
-  data.loans.push({
-    id: loanId, employeeId: emp.id, type: LOAN_TYPES[reqRow.loan_type] || 'Loan',
-    principal: reqRow.amount, monthlyAmortization: perMonth, balance: reqRow.amount,
-    active: true, source: 'application', requestId: reqRow.id
-  });
+  const loan = {
+    id: loanId, employeeId: emp.id, loanType: reqRow.loan_type, type: LOAN_TYPES[reqRow.loan_type] || 'Loan',
+    principal: reqRow.amount, balance: reqRow.amount, active: true, source: 'application', requestId: reqRow.id
+  };
+  let deductDesc;
+  if (ADVANCE_TYPES[reqRow.loan_type]) {
+    // Advance: cleared within the month — a fixed amount per cutoff over 1 or 2 cutoffs.
+    const cutoffs = Math.min(2, Math.max(1, reqRow.installments || 1));
+    const perCutoff = Number(monthlyAmortization) > 0 ? round2(monthlyAmortization) : round2(reqRow.amount / cutoffs);
+    loan.perCutoffAmount = perCutoff;
+    loan.monthlyAmortization = reqRow.amount;
+    loan.installmentsPlanned = cutoffs;
+    deductDesc = '₱' + perCutoff.toLocaleString('en-PH') + ' per cutoff over ' + cutoffs + ' cutoff' + (cutoffs > 1 ? 's' : '');
+  } else {
+    const perMonth = Number(monthlyAmortization) > 0 ? round2(monthlyAmortization) : round2(reqRow.amount / Math.max(1, reqRow.installments));
+    loan.monthlyAmortization = perMonth;
+    deductDesc = '₱' + perMonth.toLocaleString('en-PH') + ' per month';
+  }
+  data.loans.push(loan);
   let version;
   try { version = saveCompanyData(data); }
   catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
@@ -397,7 +438,7 @@ app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
     .run(loanId, req.user.id, reqRow.id);
   notify(reqRow.user_id, 'loan', 'Loan application approved',
     (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') +
-    ' approved — ₱' + Number(perMonth).toLocaleString('en-PH') + ' will be deducted each period.');
+    ' approved — ' + deductDesc + '.');
   res.json({ ok: true, loanId: loanId, companyVersion: version });
 });
 
@@ -458,6 +499,7 @@ app.get('/api/me/profile', A.requireAuth, (req, res) => {
     profile: JSON.parse(req.user.profile_json || '{}'),
     employee: emp || null,
     loans: loans,
+    cashAdvance: emp ? cashAdvanceInfo(data, emp, req.user.id) : null,
     company: data.meta.company
   });
 });
@@ -523,11 +565,25 @@ app.get('/api/me/loans', A.requireAuth, (req, res) => {
   res.json({ requests: rows });
 });
 app.post('/api/me/loans', A.requireAuth, (req, res) => {
-  const { loanType, amount, installments, reason } = req.body || {};
+  const { loanType, amount, installments, reason, emergencyAck } = req.body || {};
   if (!LOAN_TYPES[loanType]) return res.status(400).json({ error: 'Choose a valid loan type.' });
   const amt = Number(amount);
   if (!(amt > 0)) return res.status(400).json({ error: 'Enter a valid amount.' });
-  const inst = Math.max(1, parseInt(installments, 10) || 1);
+  // Advances (cash / product) are cleared within the month over 1 or 2 cutoffs.
+  const inst = ADVANCE_TYPES[loanType]
+    ? Math.min(2, Math.max(1, parseInt(installments, 10) || 1))
+    : Math.max(1, parseInt(installments, 10) || 1);
+
+  if (loanType === 'cash_advance') {
+    if (!emergencyAck) return res.status(400).json({ error: 'Please confirm the cash advance is for an emergency purpose.' });
+    const data = getCompanyData();
+    const emp = findEmpByCode(data, req.user.employee_code);
+    if (emp) {
+      const ca = cashAdvanceInfo(data, emp, req.user.id);
+      if (ca.available <= 0) return res.status(400).json({ error: 'You have reached the cash-advance limit (half of your monthly basic salary). Pay down your existing cash advance before applying again.' });
+      if (amt > ca.available) return res.status(400).json({ error: 'This exceeds your available cash-advance limit of ₱' + ca.available.toLocaleString('en-PH') + ' (half of monthly basic salary, less what you already have).' });
+    }
+  }
   db.prepare(
     `INSERT INTO loan_requests (user_id, employee_code, loan_type, amount, installments, reason)
      VALUES (?, ?, ?, ?, ?, ?)`

@@ -197,9 +197,14 @@
     var loanDeductions = [];
     (ctx.loans || []).forEach(function (ln) {
       if (!ln.active || (ln.balance || 0) <= 0) return;
-      var amt = Math.min(ln.monthlyAmortization || 0, ln.balance || 0);
-      // Prorate loan amortization across the month's periods.
-      amt = round2(amt / ppm);
+      var amt;
+      if (ln.perCutoffAmount != null) {
+        // Advances: a fixed amount is taken each cutoff (cleared within the month).
+        amt = round2(Math.min(ln.perCutoffAmount, ln.balance));
+      } else {
+        // Monthly amortization (e.g. SSS / Pag-IBIG loans) spread across the period(s).
+        amt = round2(Math.min(ln.monthlyAmortization || 0, ln.balance || 0) / ppm);
+      }
       if (amt > 0) loanDeductions.push({ id: ln.id, name: ln.type, amount: amt });
     });
 
