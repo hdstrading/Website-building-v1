@@ -373,7 +373,10 @@
       card('DTR Status — ' + esc(period.name),
         '<p class="muted">Each employee\'s <b>schedule</b> (set in their profile) is used to compute tardiness, undertime and overtime automatically from the punches.</p>' +
         '<table class="tbl"><thead><tr><th>Code</th><th>Employee</th><th>Schedule</th><th>Records</th><th></th></tr></thead><tbody>' +
-        byEmp + '</tbody></table>');
+        byEmp + '</tbody></table>') +
+      ((S.db.meta.overtime && S.db.meta.overtime.requireAuthorization !== false) ? card('Overtime Authorization',
+        '<p class="muted">Overtime is only paid when authorized. Review the overtime detected in this period\'s punches and authorize it here — no need to wait for employees to file. Covers post-shift and pre-shift (early time-in) overtime.</p>' +
+        '<button class="btn" id="otAuthBtn">Review &amp; Authorize Overtime</button>', '') : '');
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
@@ -422,6 +425,8 @@
       };
       reader.readAsText(file);
     });
+    var otAuthBtn = v.querySelector('#otAuthBtn');
+    if (otAuthBtn) otAuthBtn.addEventListener('click', function () { otAuthForm(pid); });
     v.querySelectorAll('[data-dtr-edit]').forEach(function (b) {
       b.addEventListener('click', function () { dtrForm(pid, b.dataset.dtrEdit); });
     });
@@ -432,6 +437,79 @@
         }
       });
     });
+  }
+
+  // Admin shortcut: authorize the overtime detected in a period's punches
+  // directly (writes S.db.otApprovals), without waiting for employees to file.
+  function otAuthForm(pid) {
+    var period = S.find('periods', pid);
+    var dtr = S.db.dtr[pid] || {};
+    var otPolicy = S.db.meta.overtime || {};
+    var approvals = S.db.otApprovals || {};
+    var rows = [];
+    S.list('employees').filter(function (e) { return e.active !== false; }).forEach(function (e) {
+      (dtr[e.id] || []).forEach(function (d) {
+        if (!d.date) return;
+        var r = PH.dtr.computeDay(d, {
+          defaultBreak: e.schedBreakMins != null ? e.schedBreakMins : 60,
+          schedIn: e.schedTimeIn || null, schedOut: e.schedTimeOut || null,
+          ot: otPolicy, requireOtAuth: false // want the ungated (potential) OT here
+        });
+        var post = r.otMinutes || 0, pre = r.preOtMinutes || 0;
+        if (post <= 0 && pre <= 0) return;
+        var appr = (approvals[e.id] && approvals[e.id][d.date]) || {};
+        rows.push({ eid: e.id, name: e.lastName + ', ' + e.firstName, date: d.date,
+          pre: pre, post: post, aPre: !!appr.before, aPost: !!appr.after });
+      });
+    });
+    rows.sort(function (a, b) { return a.name.localeCompare(b.name) || a.date.localeCompare(b.date); });
+
+    if (!rows.length) {
+      modal('Authorize Overtime — ' + esc(period.name),
+        '<p class="muted">No overtime was detected in this period\'s punches. Import the DTR/biometric file first, and make sure employees have a shift schedule set.</p>', null, 'wide');
+      return;
+    }
+    function cell(row, kind) {
+      var mins = kind === 'before' ? row.pre : row.post;
+      if (mins <= 0) return '<span class="muted">—</span>';
+      var checked = kind === 'before' ? row.aPre : row.aPost;
+      return '<label class="acc-chk"><input type="checkbox" data-kind="' + kind + '"' + (checked ? ' checked' : '') +
+        '> ' + (mins / 60).toFixed(2) + 'h</label>';
+    }
+    var body =
+      '<p class="muted">Tick the overtime to authorize (it then becomes payable). <b>Pre-shift</b> = clocked in before shift start; <b>After shift</b> = worked past shift end.</p>' +
+      '<div class="inline" style="margin-bottom:8px"><button class="btn-sm" id="otaAll" type="button">✓ Authorize all</button>' +
+      '<button class="btn-sm" id="otaNone" type="button">✗ Clear all</button></div>' +
+      '<div class="dtr-scroll"><table class="tbl"><thead><tr><th>Employee</th><th>Date</th><th>Pre-shift OT</th><th>After-shift OT</th></tr></thead><tbody>' +
+      rows.map(function (row, i) {
+        return '<tr data-otrow="' + i + '" data-eid="' + esc(row.eid) + '" data-date="' + esc(row.date) + '">' +
+          '<td>' + esc(row.name) + '</td><td>' + esc(row.date) + ' <span class="sub">' + weekdayName(row.date) + '</span></td>' +
+          '<td>' + cell(row, 'before') + '</td><td>' + cell(row, 'after') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+
+    modal('Authorize Overtime — ' + esc(period.name), body, function (form) {
+      form.querySelectorAll('tr[data-otrow]').forEach(function (tr) {
+        var eid = tr.dataset.eid, date = tr.dataset.date;
+        var preCb = tr.querySelector('[data-kind=before]'), postCb = tr.querySelector('[data-kind=after]');
+        var before = !!(preCb && preCb.checked), after = !!(postCb && postCb.checked);
+        S.db.otApprovals = S.db.otApprovals || {};
+        var m = S.db.otApprovals[eid] = S.db.otApprovals[eid] || {};
+        if (before || after) m[date] = { before: before, after: after };
+        else delete m[date];
+        if (Object.keys(m).length === 0) delete S.db.otApprovals[eid];
+      });
+      S.save();
+      toast('Overtime authorizations saved.');
+      renderView();
+    }, 'wide');
+
+    // "Authorize all / Clear all" convenience toggles (bind after modal is in DOM).
+    setTimeout(function () {
+      var all = document.getElementById('otaAll'), none = document.getElementById('otaNone');
+      function setAll(val) { document.querySelectorAll('.modal tr[data-otrow] input[type=checkbox]').forEach(function (c) { c.checked = val; }); }
+      if (all) all.addEventListener('click', function () { setAll(true); });
+      if (none) none.addEventListener('click', function () { setAll(false); });
+    }, 0);
   }
 
   function dtrForm(pid, empId) {
