@@ -765,7 +765,10 @@
       field('Type', select('type', ['SSS Loan', 'Pag-IBIG Loan', 'Company Loan', 'Cash Advance', 'Product Advance', 'Other'], l.type)) +
       field('Reference / Description', '<input name="reference" value="' + esc(l.reference || '') + '" placeholder="e.g. product taken, PO no.">') +
       field('Principal / Total Amount', '<input name="principal" type="number" step="0.01" value="' + (l.principal || '') + '">') +
-      field('Monthly Amortization', '<input name="monthlyAmortization" type="number" step="0.01" value="' + (l.monthlyAmortization || '') + '">') +
+      field('Monthly Amortization', '<input name="monthlyAmortization" type="number" step="0.01" value="' + (l.monthlyAmortization || '') + '">' +
+        '<small class="hint">Spread across the month\'s cutoffs. Used when the per-cutoff field below is blank.</small>') +
+      field('Per-cutoff deduction (advances)', '<input name="perCutoffAmount" type="number" step="0.01" value="' + (l.perCutoffAmount != null ? l.perCutoffAmount : '') + '">' +
+        '<small class="hint">For cash / product advances: a fixed amount taken each cutoff until cleared (e.g. full principal = one cutoff; principal ÷ 2 = two cutoffs). Leave blank for monthly-amortized loans.</small>') +
       field('Current Balance', '<input name="balance" type="number" step="0.01" value="' + (l.balance != null ? l.balance : l.principal || '') + '">') +
       field('Start Date', '<input name="startDate" type="date" value="' + esc(l.startDate || '') + '">') +
       field('Status', select('active', [['true','Active'],['false','Closed']], String(l.active !== false))) +
@@ -774,6 +777,8 @@
       var d = collect(form); d.id = l.id;
       d.principal = parseFloat(d.principal) || 0;
       d.monthlyAmortization = parseFloat(d.monthlyAmortization) || 0;
+      var perCut = parseFloat(d.perCutoffAmount);
+      if (perCut > 0) d.perCutoffAmount = perCut; else delete d.perCutoffAmount;
       d.balance = parseFloat(d.balance) || 0;
       d.active = d.active === 'true';
       if (!d.employeeId) { alert('Employee required.'); return false; }

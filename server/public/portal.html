@@ -406,44 +406,94 @@
     // ---- Loans ----
     var LOAN_TYPES = [['cash_advance','Cash Advance'],['product_advance','Product Advance'],['sss_loan','SSS Loan'],['pagibig_loan','Pag-IBIG Loan']];
     var LOAN_LABEL = {}; LOAN_TYPES.forEach(function (t) { LOAN_LABEL[t[0]] = t[1]; });
+    var caInfo = null; // cash-advance limit info from the server
     function viewLoans() {
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>Apply for a Loan / Cash Advance</h2><div class="in">' +
         '<div class="grid2">' +
-        '<div><label>Type</label><select id="lnType">' + LOAN_TYPES.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div><label>Type</label><select id="lnType"></select></div>' +
         '<div><label>Amount (₱)</label><input id="lnAmount" type="number" min="0" step="0.01" placeholder="0.00"></div>' +
-        '<div><label>Preferred number of pay-period deductions</label><input id="lnInst" type="number" min="1" step="1" value="1"></div>' +
-        '</div><label style="margin-top:10px">Reason / notes</label><textarea id="lnReason" rows="2" style="width:100%"></textarea>' +
+        '</div>' +
+        '<div id="caNotice" style="display:none;margin-top:10px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 12px;font-size:13px;color:#7f1d1d">' +
+        '<b>⚠️ Cash advances are for emergencies only</b>, such as:<ul style="margin:6px 0 0;padding-left:18px">' +
+        '<li>School requirements</li><li>Hospitalization or medical requirements</li><li>Any other emergency that may affect quality of life</li></ul></div>' +
+        '<div id="caLimit" class="legend" style="display:none;margin-top:6px"></div>' +
+        '<div id="lnSchedRow" style="margin-top:10px;display:none"><label>Deduction schedule</label>' +
+        '<select id="lnCutoffs"><option value="1">Deduct the full amount on the next cutoff</option><option value="2">Split into 2 cutoffs (half each)</option></select>' +
+        '<div class="legend">Advances are fully deducted within the month — one cutoff or split over two.</div></div>' +
+        '<div id="lnInstRow" style="margin-top:10px;display:none"><label>Preferred number of pay-period deductions</label>' +
+        '<input id="lnInst" type="number" min="1" step="1" value="1"></div>' +
+        '<div id="caAckRow" style="display:none;margin-top:10px"><label style="font-weight:400"><input type="checkbox" id="lnAck"> I confirm this cash advance is for an emergency purpose as described above.</label></div>' +
+        '<label style="margin-top:10px">Reason / notes</label><textarea id="lnReason" rows="2" style="width:100%"></textarea>' +
         '<button class="btn" id="lnSubmit" style="margin-top:12px">Submit Application</button><span id="lnMsg" class="msg"></span>' +
         '</div></div>' +
         '<div class="card"><h2>My Active Loans</h2><div class="in scroll" id="lnActive">Loading…</div></div>' +
         '<div class="card"><h2>My Loan Applications</h2><div class="in scroll" id="lnList">Loading…</div></div>';
-      document.getElementById('lnSubmit').addEventListener('click', function () {
-        var m = document.getElementById('lnMsg');
-        var payload = { loanType: document.getElementById('lnType').value,
-          amount: document.getElementById('lnAmount').value,
-          installments: document.getElementById('lnInst').value,
-          reason: document.getElementById('lnReason').value };
-        if (!(Number(payload.amount) > 0)) { m.textContent = '  Enter an amount.'; m.className = 'msg err'; return; }
-        api('/api/me/loans', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
-          m.textContent = res.ok ? '  ✓ Submitted for approval' : ('  ' + (res.body.error || 'Failed'));
-          m.className = 'msg ' + (res.ok ? 'ok' : 'err');
-          if (res.ok) { document.getElementById('lnAmount').value = ''; document.getElementById('lnReason').value = ''; loadLoans(); }
-        });
+      document.getElementById('lnType').addEventListener('change', updateLoanForm);
+      document.getElementById('lnSubmit').addEventListener('click', submitLoan);
+      // Load limit info first so the cash-advance option can be disabled if maxed.
+      api('/api/me/profile').then(function (r) {
+        caInfo = (r.body || {}).cashAdvance || null;
+        renderLoanTypes();
+        updateLoanForm();
+        renderActiveLoans(((r.body || {}).loans) || []);
       });
-      loadActiveLoans();
       loadLoans();
     }
-    function loadActiveLoans() {
-      api('/api/me/profile').then(function (r) {
-        var loans = ((r.body || {}).loans || []).filter(function (l) { return l.active !== false; });
-        var rows = loans.map(function (l) {
-          return '<tr><td>' + esc(l.type || '') + '</td><td class="num">' + peso(l.principal) + '</td><td class="num">' + peso(l.monthlyAmortization) + '</td><td class="num">' + peso(l.balance) + '</td></tr>';
-        }).join('');
-        document.getElementById('lnActive').innerHTML = rows
-          ? '<table><thead><tr><th>Loan</th><th class="num">Principal</th><th class="num">Monthly</th><th class="num">Balance</th></tr></thead><tbody>' + rows + '</tbody></table>'
-          : '<p class="muted">No active loans.</p>';
+    function renderLoanTypes() {
+      var maxed = caInfo && caInfo.available <= 0;
+      document.getElementById('lnType').innerHTML = LOAN_TYPES.map(function (t) {
+        var dis = (t[0] === 'cash_advance' && maxed) ? ' disabled' : '';
+        var lbl = t[1] + (t[0] === 'cash_advance' && maxed ? ' — limit reached' : '');
+        return '<option value="' + t[0] + '"' + dis + '>' + lbl + '</option>';
+      }).join('');
+      if (maxed && document.getElementById('lnType').value === 'cash_advance') document.getElementById('lnType').value = 'product_advance';
+    }
+    function updateLoanForm() {
+      var t = document.getElementById('lnType').value;
+      var isCash = t === 'cash_advance', isAdvance = isCash || t === 'product_advance';
+      document.getElementById('caNotice').style.display = isCash ? 'block' : 'none';
+      document.getElementById('caAckRow').style.display = isCash ? 'block' : 'none';
+      document.getElementById('lnSchedRow').style.display = isAdvance ? 'block' : 'none';
+      document.getElementById('lnInstRow').style.display = isAdvance ? 'none' : 'block';
+      var cl = document.getElementById('caLimit');
+      if (isCash && caInfo) {
+        cl.style.display = 'block';
+        cl.innerHTML = 'Cash-advance limit: <b>' + peso(caInfo.available) + '</b> available of ' + peso(caInfo.cap) +
+          ' (half of monthly basic' + (caInfo.outstanding + caInfo.pending > 0 ? '; ' + peso(caInfo.outstanding + caInfo.pending) + ' already used/pending' : '') + ').';
+        var amt = document.getElementById('lnAmount'); amt.max = caInfo.available;
+      } else { cl.style.display = 'none'; }
+    }
+    function submitLoan() {
+      var m = document.getElementById('lnMsg');
+      var t = document.getElementById('lnType').value;
+      var isAdvance = t === 'cash_advance' || t === 'product_advance';
+      var payload = { loanType: t, amount: document.getElementById('lnAmount').value,
+        installments: isAdvance ? document.getElementById('lnCutoffs').value : document.getElementById('lnInst').value,
+        reason: document.getElementById('lnReason').value,
+        emergencyAck: t === 'cash_advance' ? document.getElementById('lnAck').checked : undefined };
+      if (!(Number(payload.amount) > 0)) { m.textContent = '  Enter an amount.'; m.className = 'msg err'; return; }
+      if (t === 'cash_advance' && !payload.emergencyAck) { m.textContent = '  Please tick the emergency-purpose confirmation.'; m.className = 'msg err'; return; }
+      api('/api/me/loans', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
+        m.textContent = res.ok ? '  ✓ Submitted for approval' : ('  ' + (res.body.error || 'Failed'));
+        m.className = 'msg ' + (res.ok ? 'ok' : 'err');
+        if (res.ok) {
+          document.getElementById('lnAmount').value = ''; document.getElementById('lnReason').value = '';
+          if (document.getElementById('lnAck')) document.getElementById('lnAck').checked = false;
+          loadLoans();
+          api('/api/me/profile').then(function (r) { caInfo = (r.body || {}).cashAdvance || null; renderLoanTypes(); updateLoanForm(); renderActiveLoans(((r.body || {}).loans) || []); });
+        }
       });
+    }
+    function renderActiveLoans(loans) {
+      var active = loans.filter(function (l) { return l.active !== false; });
+      var rows = active.map(function (l) {
+        var perCut = l.perCutoffAmount != null ? peso(l.perCutoffAmount) + '/cutoff' : peso(l.monthlyAmortization) + '/mo';
+        return '<tr><td>' + esc(l.type || '') + '</td><td class="num">' + peso(l.principal) + '</td><td class="num">' + perCut + '</td><td class="num">' + peso(l.balance) + '</td></tr>';
+      }).join('');
+      document.getElementById('lnActive').innerHTML = rows
+        ? '<table><thead><tr><th>Loan</th><th class="num">Principal</th><th class="num">Deduction</th><th class="num">Balance</th></tr></thead><tbody>' + rows + '</tbody></table>'
+        : '<p class="muted">No active loans.</p>';
     }
     function loadLoans() {
       api('/api/me/loans').then(function (r) {
