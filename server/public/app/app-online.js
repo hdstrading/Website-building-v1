@@ -138,13 +138,15 @@
 
     function renderOvertime(reqs) {
       if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No overtime requests.</p>'; return; }
-      body.innerHTML = '<p class="acc-muted">OT hours are auto-computed from each employee\'s schedule and the company overtime policy (late employees forfeit the first hour). Approve valid overtime, reject the rest.</p>' +
-        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Date</th><th>Reason</th><th class="num">OT Hrs</th><th>Status</th><th></th></tr></thead><tbody>' +
+      body.innerHTML = '<p class="acc-muted">OT hours are auto-computed from each employee\'s schedule and the company overtime policy (late employees forfeit the first hour). Approving is what makes the overtime payable in payroll.</p>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Reason</th><th class="num">OT Hrs</th><th>Status</th><th></th></tr></thead><tbody>' +
         reqs.map(function (x) {
           var hrs = (x.ot_minutes / 60).toFixed(2);
+          var kind = x.ot_kind === 'before' ? 'Pre-shift' : 'After shift';
           var lateNote = x.late_minutes > 0 ? '<div class="acc-muted">late ' + x.late_minutes + 'm that day</div>' : '';
           return '<tr data-oid="' + x.id + '"><td>' + esc(x.full_name || x.email) + '</td>' +
-            '<td>' + esc(x.ot_date) + '<div class="acc-muted">ends ' + esc(x.end_time) + '</div></td>' +
+            '<td>' + esc(x.ot_date) + '<div class="acc-muted">' + (x.ot_kind === 'before' ? 'in ' : 'ends ') + esc(x.end_time) + '</div></td>' +
+            '<td>' + kind + '</td>' +
             '<td>' + esc(x.reason_label || x.reason) + '<div class="acc-muted">' + esc(x.specific_reason || '') + '</div></td>' +
             '<td class="num">' + hrs + lateNote + '</td>' +
             '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
@@ -153,7 +155,12 @@
       body.querySelectorAll('tr[data-oid]').forEach(function (tr) {
         var oid = tr.dataset.oid;
         var ok = tr.querySelector('.o-ok'), no = tr.querySelector('.o-no');
-        function decide(d) { api('/api/admin/overtime-requests/' + oid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('overtime'); }); }
+        function decide(d) {
+          api('/api/admin/overtime-requests/' + oid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function (r) {
+            if (r.body && r.body.companyChanged) refreshCompany(); // payroll gating data changed
+            renderTab('overtime');
+          });
+        }
         if (ok) ok.onclick = function () { decide('approved'); };
         if (no) no.onclick = function () { decide('rejected'); };
       });

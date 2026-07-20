@@ -108,6 +108,7 @@
       dayType: day.dayType || 'regular',
       restDay: !!day.restDay,
       workedMinutes: 0, regularMinutes: 0, otMinutes: 0, otRawMinutes: 0,
+      preOtMinutes: 0, preOtRawMinutes: 0, otExcludedMinutes: 0,
       nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0,
       absent: !!day.absent, paidLeave: !!day.leavePaid, leaveType: day.leaveType || ''
     };
@@ -154,9 +155,14 @@
       // Full scheduled day is "regular"; late & undertime are deducted separately
       // in peso terms, so paid regular time nets to what was actually rendered.
       result.regularMinutes = required;
+      // Post-shift OT (work beyond scheduled end).
       var otRaw = Math.max(0, outN - schedOutN);
       result.otRawMinutes = otRaw;
       result.otMinutes = applyOtRules(otRaw, opts.ot, result.lateMinutes);
+      // Pre-shift OT (clock-in before scheduled start). No late penalty applies.
+      var preRaw = Math.max(0, schedIn - inM);
+      result.preOtRawMinutes = preRaw;
+      result.preOtMinutes = applyOtRules(preRaw, opts.ot, 0);
     } else {
       // ----- Fallback (no schedule set): pay by hours worked beyond 8 -----
       var required2 = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
@@ -164,6 +170,15 @@
       result.otRawMinutes = Math.max(0, worked - required2);
       result.otMinutes = applyOtRules(result.otRawMinutes, opts.ot);
       if (worked < required2 && dt === 'regular') result.undertimeMinutes = required2 - worked;
+    }
+
+    // Overtime authorization gating: pay OT only when authorized for this date
+    // (before = pre-shift early-in, after = post-shift). Excluded OT is tracked
+    // so admins can see how much unauthorized OT was rendered but not paid.
+    if (opts.requireOtAuth) {
+      var auth = (opts.otAuth && opts.otAuth[day.date]) || null;
+      if (!(auth && auth.after)) { result.otExcludedMinutes += result.otMinutes; result.otMinutes = 0; }
+      if (!(auth && auth.before)) { result.otExcludedMinutes += result.preOtMinutes; result.preOtMinutes = 0; }
     }
 
     result.nightDiffMinutes = nightMinutes(inM, outM);
@@ -175,7 +190,8 @@
     var mult = DAY_TYPES[dayResult.dayType] || DAY_TYPES.regular;
     var perMin = hourlyRate / 60;
     var regularPay = dayResult.regularMinutes * perMin * mult.regular;
-    var otPay = dayResult.otMinutes * perMin * mult.ot;
+    // Pre-shift and post-shift OT are both paid at the day's OT multiplier.
+    var otPay = (dayResult.otMinutes + (dayResult.preOtMinutes || 0)) * perMin * mult.ot;
     var ndPay = dayResult.nightDiffMinutes * perMin * NIGHT_DIFF_RATE;
     return {
       regular: PH.statutory.round2(regularPay),
@@ -192,7 +208,7 @@
       holidayDaysUnworked: 0,   // unworked REGULAR holidays -> paid at 100%
       leaveDaysRequested: 0,    // unworked paid-leave days (gated by credits in payroll)
       leaveDays: [],            // [{date, type}] in order, for per-type pay & credits
-      regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
+      regularMinutes: 0, otMinutes: 0, preOtMinutes: 0, otExcludedMinutes: 0, nightDiffMinutes: 0,
       lateMinutes: 0, undertimeMinutes: 0,
       regularPay: 0, overtimePay: 0, nightDiffPay: 0,
       // Worked premium-day pay, kept apart from ordinary regular-day pay so the
@@ -220,6 +236,8 @@
       }
       summary.regularMinutes += r.regularMinutes;
       summary.otMinutes += r.otMinutes;
+      summary.preOtMinutes += (r.preOtMinutes || 0);
+      summary.otExcludedMinutes += (r.otExcludedMinutes || 0);
       summary.nightDiffMinutes += r.nightDiffMinutes;
       summary.lateMinutes += r.lateMinutes;
       summary.undertimeMinutes += r.undertimeMinutes;
@@ -354,6 +372,8 @@
    */
   function pad2n(n) { return (n < 10 ? '0' : '') + n; }
   function minutesToHHMM(m) { return pad2n(Math.floor(m / 60)) + ':' + pad2n(m % 60); }
+  // "07:57:04" -> "07:57" (biometric exports include seconds; DTR works in minutes).
+  function trimSeconds(t) { var m = /^(\d{1,2}):(\d{2})(?::\d{2})?/.exec(t || ''); return m ? m[1] + ':' + m[2] : (t || ''); }
   // Normalise a date token to YYYY-MM-DD (accepts YYYY-M-D, M/D/YYYY, D/M/YYYY).
   function normaliseDate(s) {
     s = String(s || '').trim();
@@ -412,8 +432,8 @@
         if (!date) continue;
         (out[key] = out[key] || []).push({
           date: date,
-          timeIn: String(row[iIn] || '').trim(),
-          timeOut: String(row[iOut] || '').trim()
+          timeIn: trimSeconds(String(row[iIn] || '').trim()),
+          timeOut: trimSeconds(String(row[iOut] || '').trim())
         });
       }
       return out;

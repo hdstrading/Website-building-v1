@@ -465,42 +465,51 @@
     function viewOvertime() {
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>File Overtime Authorization</h2><div class="in">' +
-        '<p class="muted">File for overtime you actually rendered. The hours are computed automatically from your shift schedule and the company overtime policy (including the late rule).</p>' +
+        '<p class="muted">File for overtime you actually rendered so it can be validated. Hours are computed automatically from your shift schedule and the company overtime policy (including the late rule). Overtime is only paid once approved.</p>' +
         '<div class="grid2">' +
+        '<div><label>Overtime type</label><select id="otKind"><option value="after">After shift (worked past shift end)</option><option value="before">Before shift (early time-in)</option></select></div>' +
         '<div><label>Date overtime was rendered</label><input id="otDate" type="date"></div>' +
-        '<div><label>End time of overtime</label><input id="otEnd" type="time"></div>' +
+        '<div><label id="otTimeLabel">End time of overtime</label><input id="otTime" type="time"></div>' +
         '<div><label>Reason for overtime</label><select id="otReason">' + OT_REASONS.map(function (t) { return '<option value="' + t[0] + '">' + t[1] + '</option>'; }).join('') + '</select></div>' +
         '</div>' +
         '<label style="margin-top:10px">Specific reason <span style="color:#e11d2a">*required</span></label>' +
         '<textarea id="otSpecific" rows="2" style="width:100%" placeholder="Describe exactly what the overtime was for"></textarea>' +
-        '<div id="otPreview" class="legend" style="margin-top:8px">Enter a date and end time to see the computed overtime.</div>' +
+        '<div id="otPreview" class="legend" style="margin-top:8px">Enter a date and time to see the computed overtime.</div>' +
         '<button class="btn" id="otSubmit" style="margin-top:8px">Submit for Approval</button><span id="otMsg" class="msg"></span>' +
         '</div></div>' +
         '<div class="card"><h2>My Overtime Requests</h2><div class="in scroll" id="otList">Loading…</div></div>';
+      document.getElementById('otKind').addEventListener('change', function () {
+        document.getElementById('otTimeLabel').textContent =
+          this.value === 'before' ? 'Your early time-in' : 'End time of overtime';
+        otPreview();
+      });
       document.getElementById('otDate').addEventListener('change', otPreview);
-      document.getElementById('otEnd').addEventListener('change', otPreview);
+      document.getElementById('otTime').addEventListener('change', otPreview);
       document.getElementById('otSubmit').addEventListener('click', otSubmit);
       loadOvertime();
     }
     function otPreview() {
-      var date = document.getElementById('otDate').value, end = document.getElementById('otEnd').value;
+      var kind = document.getElementById('otKind').value;
+      var date = document.getElementById('otDate').value, time = document.getElementById('otTime').value;
       var box = document.getElementById('otPreview');
-      if (!date || !end) { box.textContent = 'Enter a date and end time to see the computed overtime.'; return; }
+      if (!date || !time) { box.textContent = 'Enter a date and time to see the computed overtime.'; return; }
       box.textContent = 'Computing…';
-      api('/api/me/overtime/preview?date=' + encodeURIComponent(date) + '&endTime=' + encodeURIComponent(end)).then(function (r) {
+      api('/api/me/overtime/preview?kind=' + kind + '&date=' + encodeURIComponent(date) + '&time=' + encodeURIComponent(time)).then(function (r) {
         if (!r.body || !r.body.ok) { box.textContent = (r.body && r.body.error) || 'Could not compute overtime.'; return; }
         var h = (r.body.otHours || 0);
+        var where = kind === 'before' ? 'before your ' + esc(r.body.sched) + ' shift start' : 'beyond your ' + esc(r.body.sched) + ' shift end';
         var lateNote = r.body.lateMinutes > 0 ? ' (late by ' + r.body.lateMinutes + ' min that day — first-hour rule applied)' : '';
         box.innerHTML = h > 0
-          ? '<b>Computed overtime: ' + h.toFixed(2) + ' hour' + (h === 1 ? '' : 's') + '</b> beyond your ' + esc(r.body.schedOut) + ' shift end' + lateNote + '.'
+          ? '<b>Computed overtime: ' + h.toFixed(2) + ' hour' + (h === 1 ? '' : 's') + '</b> ' + where + lateNote + '.'
           : 'No creditable overtime for that time' + lateNote + '.';
       });
     }
     function otSubmit() {
       var m = document.getElementById('otMsg');
-      var payload = { date: document.getElementById('otDate').value, endTime: document.getElementById('otEnd').value,
-        reason: document.getElementById('otReason').value, specificReason: document.getElementById('otSpecific').value };
-      if (!payload.date || !payload.endTime) { m.textContent = '  Enter the date and end time.'; m.className = 'msg err'; return; }
+      var payload = { kind: document.getElementById('otKind').value, date: document.getElementById('otDate').value,
+        time: document.getElementById('otTime').value, reason: document.getElementById('otReason').value,
+        specificReason: document.getElementById('otSpecific').value };
+      if (!payload.date || !payload.time) { m.textContent = '  Enter the date and time.'; m.className = 'msg err'; return; }
       if (!payload.specificReason.trim()) { m.textContent = '  A specific reason is required.'; m.className = 'msg err'; return; }
       api('/api/me/overtime', { method: 'POST', body: JSON.stringify(payload) }).then(function (res) {
         if (!res.ok) { m.textContent = '  ' + (res.body.error || 'Failed'); m.className = 'msg err'; return; }
@@ -513,12 +522,13 @@
     function loadOvertime() {
       api('/api/me/overtime').then(function (r) {
         var rows = (r.body.requests || []).map(function (x) {
-          return '<tr><td>' + esc(x.ot_date) + '</td><td>' + esc(OT_LABEL[x.reason] || x.reason) +
+          var kind = x.ot_kind === 'before' ? 'Pre-shift' : 'After shift';
+          return '<tr><td>' + esc(x.ot_date) + '</td><td>' + kind + '</td><td>' + esc(OT_LABEL[x.reason] || x.reason) +
             '</td><td>' + esc(x.specific_reason || '') + '</td><td class="num">' + (x.ot_minutes / 60).toFixed(2) +
             '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td></tr>';
         }).join('');
         document.getElementById('otList').innerHTML = rows
-          ? '<table><thead><tr><th>Date</th><th>Reason</th><th>Specific</th><th class="num">OT Hrs</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
+          ? '<table><thead><tr><th>Date</th><th>Type</th><th>Reason</th><th>Specific</th><th class="num">OT Hrs</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<p class="muted">No overtime requests yet.</p>';
       });
     }

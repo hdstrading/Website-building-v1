@@ -1700,6 +1700,9 @@
         field('Late employees forfeit first OT hour',
           select('otLateForfeit', [['true','Yes — a late employee loses the first OT hour'],['false','No — treat OT the same for everyone']], String(ot.lateForfeitsFirstHour !== false)) +
           '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited and OT is only counted in complete whole hours after that.</small>') +
+        field('Require overtime authorization',
+          select('otRequireAuth', [['true','Yes — pay overtime only when authorized'],['false','No — pay all overtime from the DTR']], String(ot.requireAuthorization !== false)) +
+          '<small class="hint">When on, both post-shift OT and pre-shift (early time-in) OT are paid only for dates an employee filed and an admin approved. Unauthorized OT (and early time-in) is not paid.</small>') +
         '</div>',
         '<button class="btn" id="saveOt">Save Overtime Policy</button>') +
       card('Leave Application Window',
@@ -1774,6 +1777,7 @@
       ot.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
       ot.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
       ot.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
+      ot.requireAuthorization = v.querySelector('[name=otRequireAuth]').value === 'true';
       S.save();
       toast('Overtime policy saved.');
     });

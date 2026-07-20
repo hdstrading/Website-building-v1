@@ -81,9 +81,10 @@ CREATE TABLE IF NOT EXISTS overtime_requests (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   employee_code TEXT,
   ot_date TEXT NOT NULL,
+  ot_kind TEXT NOT NULL DEFAULT 'after',           -- after (post-shift) | before (pre-shift early-in)
   reason TEXT NOT NULL,                            -- production | delivery | collection
   specific_reason TEXT NOT NULL,
-  end_time TEXT NOT NULL,
+  end_time TEXT NOT NULL,                          -- end time (after) OR early time-in (before)
   ot_minutes INTEGER NOT NULL DEFAULT 0,           -- creditable OT per the company policy
   late_minutes INTEGER NOT NULL DEFAULT 0,         -- lateness that day (affects the policy)
   status TEXT NOT NULL DEFAULT 'pending',          -- pending | approved | rejected
@@ -104,18 +105,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
 `);
 
+// Migrate older overtime_requests created before ot_kind existed.
+try { db.exec("ALTER TABLE overtime_requests ADD COLUMN ot_kind TEXT NOT NULL DEFAULT 'after'"); } catch (e) { /* column already present */ }
+
 // Seed the single company row with an empty data document if missing.
 function emptyCompanyData() {
   return {
     meta: {
       version: 1,
       company: { name: 'My Company', address: '', tin: '' },
-      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true },
+      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true, requireAuthorization: true },
       leavePolicy: { manualOpen: false, openDay: 21 },
       thirteenthPolicy: { deductTardiness: true }
     },
     employees: [], allowances: [], loans: [], periods: [],
-    dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, statutoryConfig: null
+    dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, otApprovals: {}, statutoryConfig: null
   };
 }
 if (!db.prepare('SELECT 1 FROM companies WHERE id = 1').get()) {

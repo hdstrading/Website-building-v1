@@ -111,15 +111,24 @@ function lateForDate(data, emp, dateStr) {
   return 0;
 }
 // Compute creditable OT for a filed authorization (null if schedule/time missing).
-function computeFiledOT(data, emp, dateStr, endTime) {
+//  kind 'after'  — post-shift OT, timeVal = end time (work beyond shift end)
+//  kind 'before' — pre-shift OT,  timeVal = early time-in (before shift start)
+function computeFiledOT(data, emp, dateStr, kind, timeVal) {
+  const rules = (data.meta && data.meta.overtime) || {};
+  if (kind === 'before') {
+    const schedIn = hmToMin(emp.schedTimeIn);
+    const startMin = hmToMin(timeVal);
+    if (schedIn == null || startMin == null) return null;
+    const preRaw = Math.max(0, schedIn - startMin);
+    return { otRaw: preRaw, otMinutes: applyOtRulesSrv(preRaw, rules, 0), lateMinutes: 0 };
+  }
   const schedOut = hmToMin(emp.schedTimeOut);
-  const endMin = hmToMin(endTime);
+  const endMin = hmToMin(timeVal);
   if (schedOut == null || endMin == null) return null;
   const endN = endMin < schedOut ? endMin + 1440 : endMin; // crossed midnight
   const otRaw = Math.max(0, endN - schedOut);
   const late = lateForDate(data, emp, dateStr);
-  const otMinutes = applyOtRulesSrv(otRaw, (data.meta && data.meta.overtime) || {}, late);
-  return { otRaw: otRaw, otMinutes: otMinutes, lateMinutes: late };
+  return { otRaw: otRaw, otMinutes: applyOtRulesSrv(otRaw, rules, late), lateMinutes: late };
 }
 function leavePolicyOf(data) {
   return (data.meta && data.meta.leavePolicy) || { manualOpen: false, openDay: 21 };
@@ -316,10 +325,26 @@ app.post('/api/admin/overtime-requests/:id', adminMgmt, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Overtime request not found.' });
   db.prepare('UPDATE overtime_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
     .run(decision, req.user.id, row.id);
+
+  // Reflect the decision in company data so payroll gates OT on it. Keyed by the
+  // employee's id, then date, then kind (before = pre-shift, after = post-shift).
+  let companyChanged = false;
+  const data = getCompanyData();
+  const applicant = db.prepare('SELECT employee_code FROM users WHERE id = ?').get(row.user_id);
+  const emp = findEmpByCode(data, row.employee_code || (applicant && applicant.employee_code));
+  if (emp) {
+    data.otApprovals = data.otApprovals || {};
+    const byDate = data.otApprovals[emp.id] = data.otApprovals[emp.id] || {};
+    const day = byDate[row.ot_date] = byDate[row.ot_date] || {};
+    day[row.ot_kind === 'before' ? 'before' : 'after'] = (decision === 'approved');
+    if (!day.before && !day.after) delete byDate[row.ot_date];
+    try { saveCompanyData(data); companyChanged = true; } catch (e) { /* leave status set; payroll gating just won't see it yet */ }
+  }
   const hrs = (row.ot_minutes / 60).toFixed(2);
+  const kindLabel = row.ot_kind === 'before' ? 'pre-shift ' : '';
   notify(row.user_id, 'overtime', 'Overtime ' + decision,
-    'Your overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.');
-  res.json({ ok: true });
+    'Your ' + kindLabel + 'overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.');
+  res.json({ ok: true, companyChanged: companyChanged });
 });
 
 /* ---- loan applications (admin review) ---- */
@@ -456,34 +481,39 @@ app.get('/api/me/overtime/preview', A.requireAuth, (req, res) => {
   const data = getCompanyData();
   const emp = findEmpByCode(data, req.user.employee_code);
   if (!emp) return res.json({ ok: false, error: 'No employee (201) record is linked to your account yet.' });
-  if (!emp.schedTimeOut) return res.json({ ok: false, error: 'Your shift end time is not set. Ask your administrator.' });
-  const date = req.query.date, endTime = req.query.endTime;
-  if (!date || !endTime) return res.json({ ok: false });
-  const c = computeFiledOT(data, emp, date, endTime);
-  if (!c) return res.json({ ok: false, error: 'Check the end time.' });
-  res.json({ ok: true, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes, schedOut: emp.schedTimeOut });
+  const kind = req.query.kind === 'before' ? 'before' : 'after';
+  const sched = kind === 'before' ? emp.schedTimeIn : emp.schedTimeOut;
+  if (!sched) return res.json({ ok: false, error: 'Your shift ' + (kind === 'before' ? 'start' : 'end') + ' time is not set. Ask your administrator.' });
+  const date = req.query.date, time = req.query.time || req.query.endTime;
+  if (!date || !time) return res.json({ ok: false });
+  const c = computeFiledOT(data, emp, date, kind, time);
+  if (!c) return res.json({ ok: false, error: 'Check the time you entered.' });
+  res.json({ ok: true, kind: kind, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes, sched: sched });
 });
 app.get('/api/me/overtime', A.requireAuth, (req, res) => {
   const rows = db.prepare('SELECT * FROM overtime_requests WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
   res.json({ requests: rows.map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
 });
 app.post('/api/me/overtime', A.requireAuth, (req, res) => {
-  const { date, reason, specificReason, endTime } = req.body || {};
+  const { date, kind, reason, specificReason, endTime, time } = req.body || {};
+  const k = kind === 'before' ? 'before' : 'after';
+  const timeVal = time || endTime;
   if (!OT_REASONS[reason]) return res.status(400).json({ error: 'Choose a valid overtime reason.' });
   if (!date) return res.status(400).json({ error: 'Enter the date the overtime was rendered.' });
-  if (!endTime) return res.status(400).json({ error: 'Enter the end time of the overtime.' });
+  if (!timeVal) return res.status(400).json({ error: k === 'before' ? 'Enter your early time-in.' : 'Enter the end time of the overtime.' });
   if (!specificReason || !String(specificReason).trim()) return res.status(400).json({ error: 'A specific reason is required.' });
   if (parseDateLocal(date) > todayLocal()) return res.status(400).json({ error: 'The overtime date cannot be in the future.' });
   const data = getCompanyData();
   const emp = findEmpByCode(data, req.user.employee_code);
   if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to your account yet.' });
-  if (!emp.schedTimeOut) return res.status(400).json({ error: 'Your work schedule (shift end) is not set. Ask your administrator.' });
-  const c = computeFiledOT(data, emp, date, endTime);
-  if (!c) return res.status(400).json({ error: 'Could not compute overtime — check the end time.' });
+  const sched = k === 'before' ? emp.schedTimeIn : emp.schedTimeOut;
+  if (!sched) return res.status(400).json({ error: 'Your work schedule (shift ' + (k === 'before' ? 'start' : 'end') + ') is not set. Ask your administrator.' });
+  const c = computeFiledOT(data, emp, date, k, timeVal);
+  if (!c) return res.status(400).json({ error: 'Could not compute overtime — check the time you entered.' });
   db.prepare(
-    `INSERT INTO overtime_requests (user_id, employee_code, ot_date, reason, specific_reason, end_time, ot_minutes, late_minutes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(req.user.id, req.user.employee_code, date, reason, String(specificReason).trim(), endTime, c.otMinutes, c.lateMinutes);
+    `INSERT INTO overtime_requests (user_id, employee_code, ot_date, ot_kind, reason, specific_reason, end_time, ot_minutes, late_minutes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(req.user.id, req.user.employee_code, date, k, reason, String(specificReason).trim(), timeVal, c.otMinutes, c.lateMinutes);
   res.json({ ok: true, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes });
 });
 
