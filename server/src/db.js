@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS loan_requests (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS overtime_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  ot_date TEXT NOT NULL,
+  reason TEXT NOT NULL,                            -- production | delivery | collection
+  specific_reason TEXT NOT NULL,
+  end_time TEXT NOT NULL,
+  ot_minutes INTEGER NOT NULL DEFAULT 0,           -- creditable OT per the company policy
+  late_minutes INTEGER NOT NULL DEFAULT 0,         -- lateness that day (affects the policy)
+  status TEXT NOT NULL DEFAULT 'pending',          -- pending | approved | rejected
+  reviewed_by INTEGER,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

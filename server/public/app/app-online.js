@@ -48,7 +48,7 @@
     var ov = document.createElement('div');
     ov.className = 'acc-overlay';
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="loans">Loan Requests</a></div>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a></div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
     ov.querySelector('.acc-x').onclick = function () { ov.remove(); };
@@ -61,6 +61,7 @@
     function renderTab(tab) {
       body.innerHTML = 'Loading…';
       if (tab === 'leave') return api('/api/admin/leave-requests').then(function (r) { renderLeave(r.body.requests || []); });
+      if (tab === 'overtime') return api('/api/admin/overtime-requests').then(function (r) { renderOvertime(r.body.requests || []); });
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
@@ -133,6 +134,29 @@
         if (no) no.onclick = function () { decide(lid, 'rejected'); };
       });
       function decide(lid, d) { api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('leave'); }); }
+    }
+
+    function renderOvertime(reqs) {
+      if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No overtime requests.</p>'; return; }
+      body.innerHTML = '<p class="acc-muted">OT hours are auto-computed from each employee\'s schedule and the company overtime policy (late employees forfeit the first hour). Approve valid overtime, reject the rest.</p>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Date</th><th>Reason</th><th class="num">OT Hrs</th><th>Status</th><th></th></tr></thead><tbody>' +
+        reqs.map(function (x) {
+          var hrs = (x.ot_minutes / 60).toFixed(2);
+          var lateNote = x.late_minutes > 0 ? '<div class="acc-muted">late ' + x.late_minutes + 'm that day</div>' : '';
+          return '<tr data-oid="' + x.id + '"><td>' + esc(x.full_name || x.email) + '</td>' +
+            '<td>' + esc(x.ot_date) + '<div class="acc-muted">ends ' + esc(x.end_time) + '</div></td>' +
+            '<td>' + esc(x.reason_label || x.reason) + '<div class="acc-muted">' + esc(x.specific_reason || '') + '</div></td>' +
+            '<td class="num">' + hrs + lateNote + '</td>' +
+            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
+            '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn o-ok">Approve</button><button class="acc-btn ghost o-no">Reject</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      body.querySelectorAll('tr[data-oid]').forEach(function (tr) {
+        var oid = tr.dataset.oid;
+        var ok = tr.querySelector('.o-ok'), no = tr.querySelector('.o-no');
+        function decide(d) { api('/api/admin/overtime-requests/' + oid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('overtime'); }); }
+        if (ok) ok.onclick = function () { decide('approved'); };
+        if (no) no.onclick = function () { decide('rejected'); };
+      });
     }
 
     function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }

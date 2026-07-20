@@ -66,6 +66,61 @@ const LOAN_TYPES = {
   sss_loan:        'SSS Loan',
   pagibig_loan:    'Pag-IBIG Loan'
 };
+const OT_REASONS = { production: 'Production', delivery: 'Delivery', collection: 'Collection' };
+
+/* ---------- overtime authorization computation ----------
+ * Mirrors assets/js/dtr.js applyOtRules so filed OT is credited exactly like
+ * DTR-derived OT: first hour must be completed, then round in blocks, and — if
+ * the employee was late beyond the grace window — the first OT hour is forfeited
+ * and only whole hours are credited (the company's OT-when-late policy).
+ */
+function hmToMin(s) { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || '')); return m ? (+m[1]) * 60 + (+m[2]) : null; }
+function applyOtRulesSrv(otRaw, rules, lateMinutes) {
+  rules = rules || {};
+  if (rules.enabled === false) return 0;
+  if (!(otRaw > 0)) return 0;
+  const inc = rules.incrementMinutes > 0 ? rules.incrementMinutes : 30;
+  const grace = rules.graceMinutes != null ? rules.graceMinutes : 5;
+  const minM = rules.minMinutes != null ? rules.minMinutes : 60;
+  const late = lateMinutes || 0;
+  if (late > grace && rules.lateForfeitsFirstHour !== false) {
+    const creditable = otRaw - minM;          // forfeit the first hour
+    if (creditable <= 0) return 0;
+    return Math.floor(creditable / 60) * 60;  // whole hours only
+  }
+  let blocks = Math.floor(otRaw / inc);
+  const rem = otRaw - blocks * inc;
+  if (rem >= inc - grace) blocks += 1;
+  const rounded = blocks * inc;
+  return rounded < minM ? 0 : rounded;
+}
+// Lateness (minutes) that day, from the employee's DTR punch for the date.
+function lateForDate(data, emp, dateStr) {
+  const schedIn = hmToMin(emp.schedTimeIn);
+  if (schedIn == null) return 0;
+  for (const pid in (data.dtr || {})) {
+    const days = (data.dtr[pid] || {})[emp.id];
+    if (!days) continue;
+    for (const d of days) {
+      if (d.date === dateStr && d.timeIn) {
+        const ti = hmToMin(d.timeIn);
+        if (ti != null) return Math.max(0, ti - schedIn);
+      }
+    }
+  }
+  return 0;
+}
+// Compute creditable OT for a filed authorization (null if schedule/time missing).
+function computeFiledOT(data, emp, dateStr, endTime) {
+  const schedOut = hmToMin(emp.schedTimeOut);
+  const endMin = hmToMin(endTime);
+  if (schedOut == null || endMin == null) return null;
+  const endN = endMin < schedOut ? endMin + 1440 : endMin; // crossed midnight
+  const otRaw = Math.max(0, endN - schedOut);
+  const late = lateForDate(data, emp, dateStr);
+  const otMinutes = applyOtRulesSrv(otRaw, (data.meta && data.meta.overtime) || {}, late);
+  return { otRaw: otRaw, otMinutes: otMinutes, lateMinutes: late };
+}
 function leavePolicyOf(data) {
   return (data.meta && data.meta.leavePolicy) || { manualOpen: false, openDay: 21 };
 }
@@ -246,6 +301,27 @@ app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ---- overtime authorization (admin review) ---- */
+app.get('/api/admin/overtime-requests', A.requireAdmin, (req, res) => {
+  const rows = db.prepare(
+    `SELECT o.*, u.full_name, u.email FROM overtime_requests o JOIN users u ON u.id = o.user_id
+     ORDER BY (o.status = 'pending') DESC, o.ot_date DESC, o.created_at DESC`
+  ).all();
+  res.json({ requests: rows.map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
+});
+app.post('/api/admin/overtime-requests/:id', adminMgmt, (req, res) => {
+  const { decision } = req.body || {};
+  if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
+  const row = db.prepare('SELECT * FROM overtime_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Overtime request not found.' });
+  db.prepare('UPDATE overtime_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
+    .run(decision, req.user.id, row.id);
+  const hrs = (row.ot_minutes / 60).toFixed(2);
+  notify(row.user_id, 'overtime', 'Overtime ' + decision,
+    'Your overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.');
+  res.json({ ok: true });
+});
+
 /* ---- loan applications (admin review) ---- */
 app.get('/api/admin/loan-requests', A.requireAdmin, (req, res) => {
   const rows = db.prepare(
@@ -372,6 +448,43 @@ app.post('/api/me/notifications/read', A.requireAuth, (req, res) => {
   if (id) db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, req.user.id);
   else db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').run(req.user.id);
   res.json({ ok: true });
+});
+
+/* ---- overtime authorization (employee self-service) ---- */
+// Live preview of creditable OT for a date + end time (no write).
+app.get('/api/me/overtime/preview', A.requireAuth, (req, res) => {
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, req.user.employee_code);
+  if (!emp) return res.json({ ok: false, error: 'No employee (201) record is linked to your account yet.' });
+  if (!emp.schedTimeOut) return res.json({ ok: false, error: 'Your shift end time is not set. Ask your administrator.' });
+  const date = req.query.date, endTime = req.query.endTime;
+  if (!date || !endTime) return res.json({ ok: false });
+  const c = computeFiledOT(data, emp, date, endTime);
+  if (!c) return res.json({ ok: false, error: 'Check the end time.' });
+  res.json({ ok: true, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes, schedOut: emp.schedTimeOut });
+});
+app.get('/api/me/overtime', A.requireAuth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM overtime_requests WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+  res.json({ requests: rows.map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
+});
+app.post('/api/me/overtime', A.requireAuth, (req, res) => {
+  const { date, reason, specificReason, endTime } = req.body || {};
+  if (!OT_REASONS[reason]) return res.status(400).json({ error: 'Choose a valid overtime reason.' });
+  if (!date) return res.status(400).json({ error: 'Enter the date the overtime was rendered.' });
+  if (!endTime) return res.status(400).json({ error: 'Enter the end time of the overtime.' });
+  if (!specificReason || !String(specificReason).trim()) return res.status(400).json({ error: 'A specific reason is required.' });
+  if (parseDateLocal(date) > todayLocal()) return res.status(400).json({ error: 'The overtime date cannot be in the future.' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, req.user.employee_code);
+  if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to your account yet.' });
+  if (!emp.schedTimeOut) return res.status(400).json({ error: 'Your work schedule (shift end) is not set. Ask your administrator.' });
+  const c = computeFiledOT(data, emp, date, endTime);
+  if (!c) return res.status(400).json({ error: 'Could not compute overtime — check the end time.' });
+  db.prepare(
+    `INSERT INTO overtime_requests (user_id, employee_code, ot_date, reason, specific_reason, end_time, ot_minutes, late_minutes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(req.user.id, req.user.employee_code, date, reason, String(specificReason).trim(), endTime, c.otMinutes, c.lateMinutes);
+  res.json({ ok: true, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes });
 });
 
 /* ---- loan applications (employee self-service) ---- */
