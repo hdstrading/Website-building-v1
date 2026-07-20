@@ -195,6 +195,9 @@
       regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
       lateMinutes: 0, undertimeMinutes: 0,
       regularPay: 0, overtimePay: 0, nightDiffPay: 0,
+      // Worked premium-day pay, kept apart from ordinary regular-day pay so the
+      // payslip can show holiday/rest-day pay on their own lines.
+      regularHolidayPay: 0, specialHolidayPay: 0, restDayPay: 0,
       details: []
     };
     (days || []).forEach(function (d) {
@@ -220,7 +223,12 @@
       summary.nightDiffMinutes += r.nightDiffMinutes;
       summary.lateMinutes += r.lateMinutes;
       summary.undertimeMinutes += r.undertimeMinutes;
-      summary.regularPay += pay.regular;
+      // Route the day's base ("regular") pay into the right bucket by day type:
+      // ordinary regular days vs worked regular-holiday / special-holiday / rest-day.
+      if (r.dayType === 'regular') summary.regularPay += pay.regular;
+      else if (/regular_hol/.test(r.dayType)) summary.regularHolidayPay += pay.regular;
+      else if (/special/.test(r.dayType)) summary.specialHolidayPay += pay.regular;
+      else summary.restDayPay += pay.regular; // rest_day
       summary.overtimePay += pay.overtime;
       summary.nightDiffPay += pay.nightDiff;
       summary.details.push(r);
@@ -229,7 +237,7 @@
     var perMin = hourlyRate / 60;
     summary.lateDeduction = PH.statutory.round2(summary.lateMinutes * perMin);
     summary.undertimeDeduction = PH.statutory.round2(summary.undertimeMinutes * perMin);
-    ['regularPay', 'overtimePay', 'nightDiffPay'].forEach(function (k) {
+    ['regularPay', 'overtimePay', 'nightDiffPay', 'regularHolidayPay', 'specialHolidayPay', 'restDayPay'].forEach(function (k) {
       summary[k] = PH.statutory.round2(summary[k]);
     });
     return summary;

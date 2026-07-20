@@ -197,6 +197,13 @@
         field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
         field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
       '</div>' +
+      '<h4 class="form-section">Statutory Deductions</h4>' +
+      '<p class="sub">Probationary employees may opt out of government deductions for their first six months; switch these to “Deduct” once regularized. When off, both the employee and employer share are skipped and the employee is left off that agency’s remittance report.</p>' +
+      '<div class="grid3">' +
+        field('SSS', select('deductSSS', [['true','Deduct'],['false','Not deducted']], String(emp.deductSSS !== false))) +
+        field('PhilHealth', select('deductPhilHealth', [['true','Deduct'],['false','Not deducted']], String(emp.deductPhilHealth !== false))) +
+        field('Pag-IBIG', select('deductPagIBIG', [['true','Deduct'],['false','Not deducted']], String(emp.deductPagIBIG !== false))) +
+      '</div>' +
       '<h4 class="form-section">Work Schedule</h4><div class="grid2">' +
         field('Shift Time In',
           '<input name="schedTimeIn" value="' + esc(emp.schedTimeIn || '') + '" placeholder="08:00">' +
@@ -240,6 +247,9 @@
       data.leaveCreditsUsed = parseFloat(data.leaveCreditsUsed) || 0;
       data.schedBreakMins = data.schedBreakMins !== '' ? (parseInt(data.schedBreakMins, 10) || 0) : 60;
       data.active = data.active === 'true';
+      data.deductSSS = data.deductSSS === 'true';
+      data.deductPhilHealth = data.deductPhilHealth === 'true';
+      data.deductPagIBIG = data.deductPagIBIG === 'true';
       if (!data.code || !data.lastName) { alert('Code and Last Name are required.'); return false; }
       S.upsert('employees', data);
       renderView();
@@ -289,7 +299,10 @@
           '</table></div>' +
         '<div><h4>Government IDs</h4><table class="f201-tbl">' +
           row('SSS No.', emp.sssNo) + row('PhilHealth No.', emp.philhealthNo) +
-          row('Pag-IBIG No.', emp.pagibigNo) + row('TIN', emp.tin) + '</table></div>' +
+          row('Pag-IBIG No.', emp.pagibigNo) + row('TIN', emp.tin) +
+          row('Deductions', 'SSS: ' + (emp.deductSSS !== false ? 'Yes' : 'No') +
+            ' · PhilHealth: ' + (emp.deductPhilHealth !== false ? 'Yes' : 'No') +
+            ' · Pag-IBIG: ' + (emp.deductPagIBIG !== false ? 'Yes' : 'No')) + '</table></div>' +
         '<div><h4>Bank Details (Salary Credit)</h4><table class="f201-tbl">' +
           row('Bank', emp.bankName) + row('Account Name', emp.bankAccountName) +
           row('Account Number', emp.bankAccountNumber) + '</table>' +
@@ -1171,15 +1184,24 @@
     return d.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
   }
   // Monthly contribution snapshot for every active employee.
-  function remittanceData() {
-    return S.list('employees').filter(function (e) { return e.active !== false; }).map(function (e) {
+  // Employees excluded from a given agency's report when opted out at the 201 level.
+  function remittanceOptedOut(emp, kind) {
+    if (kind === 'sss') return emp.deductSSS === false;
+    if (kind === 'philhealth') return emp.deductPhilHealth === false;
+    if (kind === 'pagibig') return emp.deductPagIBIG === false;
+    return false;
+  }
+  function remittanceData(kind) {
+    return S.list('employees').filter(function (e) {
+      return e.active !== false && !(kind && remittanceOptedOut(e, kind));
+    }).map(function (e) {
       var basis = PH.payroll.rates(e).monthlyBasic;
       var c = PH.statutory.computeContributions(basis);
       return { emp: e, basis: basis, sss: c.sss, philhealth: c.philhealth, pagibig: c.pagibig };
     });
   }
   function remittanceTable(kind) {
-    var data = remittanceData();
+    var data = remittanceData(kind);
     if (!data.length) return '<p class="muted">No active employees to report.</p>';
     var head, bodyFn, tot;
     if (kind === 'sss') {
@@ -1232,7 +1254,7 @@
       '<button class="btn-sm" data-remit-csv="' + kind + '">Export CSV</button>');
   }
   function exportRemittanceCSV(kind, monthLabel) {
-    var data = remittanceData();
+    var data = remittanceData(kind);
     var lines, fname;
     if (kind === 'sss') {
       lines = [['SSS No.', 'Name', 'MSC', 'EE', 'ER', 'EC', 'Total'].join(',')];

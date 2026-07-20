@@ -64,6 +64,7 @@
       // No DTR: pay the period's prorated basic salary.
       basicPay = round2(r.monthlyBasic / ppm);
       dtr = { regularPay: basicPay, overtimePay: 0, nightDiffPay: 0,
+        regularHolidayPay: 0, specialHolidayPay: 0, restDayPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
         paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0, leaveDays: [],
         regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
@@ -73,14 +74,18 @@
     // ---- Earnings -----------------------------------------------------------
     var earnings = [];
     earnings.push({ name: 'Basic Pay', amount: basicPay, taxable: true });
+    // Worked premium-day pay — shown on their own lines, separate from Basic Pay.
+    if (dtr.regularHolidayPay) earnings.push({ name: 'Regular Holiday Pay (worked)', amount: dtr.regularHolidayPay, taxable: true, kind: 'holiday' });
+    if (dtr.specialHolidayPay) earnings.push({ name: 'Special Holiday Pay (worked)', amount: dtr.specialHolidayPay, taxable: true, kind: 'holiday' });
+    if (dtr.restDayPay) earnings.push({ name: 'Rest Day Pay (worked)', amount: dtr.restDayPay, taxable: true, kind: 'holiday' });
     if (dtr.overtimePay) earnings.push({ name: 'Overtime Pay', amount: dtr.overtimePay, taxable: true });
     if (dtr.nightDiffPay) earnings.push({ name: 'Night Differential', amount: dtr.nightDiffPay, taxable: true });
 
     // Unworked regular-holiday pay (100% of daily rate per unworked reg. holiday).
     if (dtr.holidayDaysUnworked) {
-      earnings.push({ name: 'Holiday Pay (' + dtr.holidayDaysUnworked + ' day' +
+      earnings.push({ name: 'Regular Holiday Pay (unworked, ' + dtr.holidayDaysUnworked + ' day' +
         (dtr.holidayDaysUnworked > 1 ? 's' : '') + ')',
-        amount: round2(dtr.holidayDaysUnworked * r.daily), taxable: true });
+        amount: round2(dtr.holidayDaysUnworked * r.daily), taxable: true, kind: 'holiday' });
     }
 
     // Service Incentive Leave: pay requested leave days, capped by remaining
@@ -160,11 +165,14 @@
 
     // Each contribution can be scheduled on a different cut-off, so they are
     // toggled independently per period (with migration from the old flag).
+    // Effective = period is scheduled for this contribution AND the employee is
+    // not opted out at the 201 level (e.g. a probationary employee within their
+    // first six months). Default (undefined) means "deduct".
     var per = ctx.period;
     var legacy = per.applyContributions !== false;
-    var applySSS = per.applySSS !== undefined ? !!per.applySSS : legacy;
-    var applyPH = per.applyPhilHealth !== undefined ? !!per.applyPhilHealth : legacy;
-    var applyPI = per.applyPagIBIG !== undefined ? !!per.applyPagIBIG : legacy;
+    var applySSS = (per.applySSS !== undefined ? !!per.applySSS : legacy) && (emp.deductSSS !== false);
+    var applyPH = (per.applyPhilHealth !== undefined ? !!per.applyPhilHealth : legacy) && (emp.deductPhilHealth !== false);
+    var applyPI = (per.applyPagIBIG !== undefined ? !!per.applyPagIBIG : legacy) && (emp.deductPagIBIG !== false);
     var sssEE = applySSS ? contrib.sss.ee : 0;
     var phEE = applyPH ? contrib.philhealth.ee : 0;
     var piEE = applyPI ? contrib.pagibig.ee : 0;
