@@ -15,7 +15,7 @@
         version: 1,
         company: { name: 'My Company', address: '', tin: '' },
         // Company overtime policy (editable in Settings).
-        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true },
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true, requireAuthorization: true },
         // Leave application window (who can file leave, and when).
         //  openDay     — day of month from which next month's leave may be filed
         //  manualOpen  — superadmin master switch to open filing for any future month
@@ -32,6 +32,7 @@
       adjustments: {},  // { periodId: { employeeId: [{name,amount,taxable,type}] } }
       payrolls: {},     // { periodId: { employeeId: computedResult } }
       thirteenthMonth: {}, // { year: { employeeId: { basicEarned, released } } }
+      otApprovals: {},  // { employeeId: { 'YYYY-MM-DD': { before, after } } } authorized OT
       statutoryConfig: null
     };
   }
@@ -51,6 +52,8 @@
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
     if (db.meta.overtime.lateForfeitsFirstHour === undefined) db.meta.overtime.lateForfeitsFirstHour = true;
+    if (db.meta.overtime.requireAuthorization === undefined) db.meta.overtime.requireAuthorization = true;
+    if (!db.otApprovals) db.otApprovals = {};
     if (!db.meta.leavePolicy) db.meta.leavePolicy = emptyDB().meta.leavePolicy;
     if (!db.meta.thirteenthPolicy) db.meta.thirteenthPolicy = emptyDB().meta.thirteenthPolicy;
     if (!db.thirteenthMonth) db.thirteenthMonth = {};

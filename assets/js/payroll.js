@@ -52,11 +52,15 @@
     var dtr = null;
     var basicPay;
     if (ctx.dtrDays && ctx.dtrDays.length) {
+      var otPolicy = (PH.storage.db.meta && PH.storage.db.meta.overtime) || null;
       dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, {
         defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
         schedIn: emp.schedTimeIn || null,
         schedOut: emp.schedTimeOut || null,
-        ot: (PH.storage.db.meta && PH.storage.db.meta.overtime) || null
+        ot: otPolicy,
+        // Overtime is paid only when authorized, if the company requires it.
+        requireOtAuth: !!(otPolicy && otPolicy.requireAuthorization),
+        otAuth: (PH.storage.db.otApprovals && PH.storage.db.otApprovals[emp.id]) || {}
       });
       // Base pay from actual worked regular hours; OT & ND added separately.
       basicPay = dtr.regularPay;
@@ -67,7 +71,7 @@
         regularHolidayPay: 0, specialHolidayPay: 0, restDayPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
         paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0, leaveDays: [],
-        regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0,
+        regularMinutes: 0, otMinutes: 0, preOtMinutes: 0, otExcludedMinutes: 0, nightDiffMinutes: 0,
         lateMinutes: 0, undertimeMinutes: 0, details: [] };
     }
 

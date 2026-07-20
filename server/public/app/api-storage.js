@@ -18,11 +18,11 @@
   function emptyDB() {
     return {
       meta: { version: 1, company: { name: 'My Company', address: '', tin: '' },
-        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true },
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true, requireAuthorization: true },
         leavePolicy: { manualOpen: false, openDay: 21 },
         thirteenthPolicy: { deductTardiness: true } },
       employees: [], allowances: [], loans: [], periods: [],
-      dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, statutoryConfig: null
+      dtr: {}, adjustments: {}, payrolls: {}, thirteenthMonth: {}, otApprovals: {}, statutoryConfig: null
     };
   }
 
@@ -34,6 +34,8 @@
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
     if (db.meta.overtime.lateForfeitsFirstHour === undefined) db.meta.overtime.lateForfeitsFirstHour = true;
+    if (db.meta.overtime.requireAuthorization === undefined) db.meta.overtime.requireAuthorization = true;
+    if (!db.otApprovals) db.otApprovals = {};
     if (!db.meta.leavePolicy) db.meta.leavePolicy = emptyDB().meta.leavePolicy;
     if (!db.meta.thirteenthPolicy) db.meta.thirteenthPolicy = emptyDB().meta.thirteenthPolicy;
     if (!db.thirteenthMonth) db.thirteenthMonth = {};
