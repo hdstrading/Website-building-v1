@@ -635,25 +635,10 @@ app.get('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
   const days = ((data.dtr[period.id] || {})[emp.id]) || [];
   res.json({ period: period, days: days });
 });
-// Submit own DTR for a period (writes into company data + records a submission).
+// DTR is view-only for employees — attendance comes from the biometric device /
+// admin, so employees cannot change their own records (this would affect payroll).
 app.post('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
-  const { days } = req.body || {};
-  if (!Array.isArray(days)) return res.status(400).json({ error: 'days must be an array.' });
-  const data = getCompanyData();
-  const emp = findEmpByCode(data, req.user.employee_code);
-  const period = (data.periods || []).find(function (p) { return p.id === req.params.periodId; });
-  if (!emp) return res.status(400).json({ error: 'No employee record is linked to your account yet.' });
-  if (!period) return res.status(404).json({ error: 'Payroll period not found.' });
-  if (period.status === 'finalized') return res.status(400).json({ error: 'That period is already finalized.' });
-  data.dtr[period.id] = data.dtr[period.id] || {};
-  data.dtr[period.id][emp.id] = days;
-  saveCompanyData(data);
-  db.prepare(
-    `INSERT INTO dtr_submissions (user_id, employee_code, period_id, days_json)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(user_id, period_id) DO UPDATE SET days_json = excluded.days_json, created_at = datetime('now')`
-  ).run(req.user.id, req.user.employee_code, period.id, JSON.stringify(days));
-  res.json({ ok: true });
+  return res.status(403).json({ error: 'Your DTR is view-only. Time records are maintained by your administrator from the biometric device.' });
 });
 
 // Own payslips (finalized payroll results).
