@@ -1,0 +1,81 @@
+name: Build Android Release (AAB for Google Play)
+
+# Builds a SIGNED Android App Bundle (.aab) to upload to Google Play.
+# Run it manually from the Actions tab (Run workflow). It stays green and simply
+# skips until you add the signing secrets below.
+#
+# Required repo secrets (Settings > Secrets and variables > Actions):
+#   ANDROID_KEYSTORE_BASE64  - your upload keystore (.jks) base64-encoded:
+#                              base64 -w0 upload-keystore.jks   (macOS: base64 -i ...)
+#   ANDROID_KEYSTORE_PASSWORD - keystore password
+#   ANDROID_KEY_ALIAS         - key alias
+#   ANDROID_KEY_PASSWORD      - key password
+#
+# The uploaded artifact "ph-payroll-aab" contains app-release.aab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      versionName:
+        description: 'Version name shown to users (e.g. 1.0)'
+        required: true
+        default: '1.0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check signing secrets are configured
+        id: cfg
+        run: |
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "Signing secrets not set yet — skipping (expected until you add them)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.configured == 'true'
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        if: steps.cfg.outputs.configured == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        if: steps.cfg.outputs.configured == 'true'
+        uses: android-actions/setup-android@v4
+
+      - name: Install SDK packages
+        if: steps.cfg.outputs.configured == 'true'
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Decode keystore
+        if: steps.cfg.outputs.configured == 'true'
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+
+      - name: Build signed release bundle
+        if: steps.cfg.outputs.configured == 'true'
+        working-directory: android
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/upload-keystore.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APP_VERSION_CODE: ${{ github.run_number }}
+          APP_VERSION_NAME: ${{ github.event.inputs.versionName }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew bundleRelease --no-daemon --stacktrace
+
+      - name: Upload AAB artifact
+        if: steps.cfg.outputs.configured == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ph-payroll-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error

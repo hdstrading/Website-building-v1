@@ -3,16 +3,32 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def RELEASE_STORE_FILE = System.getenv('RELEASE_STORE_FILE')
+
 android {
     namespace 'com.hdstrading.phpayroll'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.hdstrading.phpayroll"
         minSdk 26
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        targetSdk 35
+        // Bump per Play upload; CI sets these from env (run number / tag).
+        versionCode (System.getenv('APP_VERSION_CODE') ?: '1') as int
+        versionName (System.getenv('APP_VERSION_NAME') ?: '1.0')
+    }
+
+    signingConfigs {
+        // Release signing is driven by env vars (set in CI from GitHub secrets).
+        // When they're absent the release build is simply unsigned (debug still works).
+        release {
+            if (RELEASE_STORE_FILE) {
+                storeFile file(RELEASE_STORE_FILE)
+                storePassword System.getenv('RELEASE_STORE_PASSWORD')
+                keyAlias System.getenv('RELEASE_KEY_ALIAS')
+                keyPassword System.getenv('RELEASE_KEY_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
@@ -22,6 +38,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (RELEASE_STORE_FILE) signingConfig signingConfigs.release
         }
     }
 
