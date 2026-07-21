@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const { db, emptyCompanyData } = require('./db');
 const A = require('./auth');
 const mailer = require('./mailer');
+const engine = require('./payroll-engine');
 
 const app = express();
 app.set('trust proxy', true); // behind Caddy/Nginx: honour X-Forwarded-Proto
@@ -153,6 +154,88 @@ function cashAdvanceInfo(data, emp, userId) {
   const pending = round2(pendingCashAdvanceAmount(userId));
   return { monthlyBasic: monthlyBasicOf(emp), cap: cap, outstanding: outstanding, pending: pending,
     available: round2(Math.max(0, cap - outstanding - pending)) };
+}
+
+/* ================= AUTOMATIC PAYROLL PERIODS & JOBS ================= */
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function pad2i(n) { return (n < 10 ? '0' : '') + n; }
+function isoYMD(y, m, d) { return y + '-' + pad2i(m) + '-' + pad2i(d); }
+function isoOf(dt) { return isoYMD(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()); }
+function lastDayOfMonth(y, m) { return new Date(y, m, 0).getDate(); } // m = 1-12
+function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
+// The two cutoff periods for calendar month y/m (m = 1-12).
+function periodsForMonth(y, m) {
+  const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y;
+  const p1 = { id: 'p_' + y + '-' + pad2i(m) + '_15', cutoff: '15th', frequency: 'semi-monthly', status: 'open', auto: true,
+    name: MONTHS[m - 1] + ' ' + y + ' — 15th pay',
+    startDate: isoYMD(py, pm, 26), endDate: isoYMD(y, m, 10), payDate: isoYMD(y, m, 15) };
+  const payD = Math.min(30, lastDayOfMonth(y, m)); // last day when the month has no 30th (Feb)
+  const p2 = { id: 'p_' + y + '-' + pad2i(m) + '_30', cutoff: '30th', frequency: 'semi-monthly', status: 'open', auto: true,
+    name: MONTHS[m - 1] + ' ' + y + ' — 30th pay',
+    startDate: isoYMD(y, m, 11), endDate: isoYMD(y, m, 25), payDate: isoYMD(y, m, payD) };
+  return [p1, p2];
+}
+// Ensure the current and next month's cutoff periods exist (idempotent by id).
+function ensurePeriods(data, today) {
+  data.periods = data.periods || [];
+  const have = {}; data.periods.forEach(function (p) { have[p.id] = true; });
+  const y = today.getFullYear(), m = today.getMonth() + 1;
+  const months = [[y, m], [m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1]];
+  let changed = false;
+  months.forEach(function (ym) {
+    periodsForMonth(ym[0], ym[1]).forEach(function (p) { if (!have[p.id]) { data.periods.push(p); changed = true; } });
+  });
+  return changed;
+}
+function activeEmployeeUsers() {
+  return db.prepare("SELECT * FROM users WHERE status = 'active' AND (role = 'employee' OR role = 'supervisor') AND employee_code IS NOT NULL").all();
+}
+function adminUsers() {
+  return db.prepare("SELECT * FROM users WHERE status = 'active' AND (role = 'superadmin' OR role = 'admin_payroll')").all();
+}
+function notifyAll(users, type, title, body) { users.forEach(function (u) { notify(u.id, type, title, body); }); }
+
+// Daily maintenance: create upcoming periods, send cutoff reminders, and
+// auto-compute a draft payroll once a cutoff has ended (admin reviews & finalizes).
+function runDailyJobs() {
+  try {
+    const data = getCompanyData();
+    const today = todayLocal();
+    let changed = ensurePeriods(data, today);
+    (data.periods || []).forEach(function (p) {
+      if (p.status === 'finalized') return;
+      const end = parseDateLocal(p.endDate);
+      const dayBefore = new Date(end); dayBefore.setDate(end.getDate() - 1);
+      // 1) Reminder the day before the cutoff closes (once).
+      if (!p.reminderSent && sameDay(today, dayBefore)) {
+        notifyAll(activeEmployeeUsers(), 'cutoff', 'Cutoff closes tomorrow',
+          'The cutoff for ' + p.name + ' closes on ' + p.endDate + '. File any leave or overtime now — anything after that is credited to the next cutoff.');
+        p.reminderSent = true; changed = true;
+      }
+      // 2) Auto-compute a draft payroll once the cutoff has ended (once).
+      if (!p.autoComputed && today > end) {
+        try {
+          const results = engine.computePeriod(data, p);
+          data.payrolls = data.payrolls || {};
+          data.payrolls[p.id] = results;
+          p.autoComputed = true; p.autoComputedAt = isoOf(today);
+          notifyAll(adminUsers(), 'payroll', 'Draft payroll ready',
+            'A draft payroll for ' + p.name + ' has been computed and is ready to review and finalize (pay date ' + p.payDate + '). Upload the latest DTR first, then finalize.');
+          changed = true;
+        } catch (e) { console.error('auto payroll failed for ' + p.id, e.message); }
+      }
+    });
+    if (changed) saveCompanyData(data);
+  } catch (e) { console.error('runDailyJobs failed', e.message); }
+}
+// The next chronological non-finalized period after a given one (for OT carry-over).
+function nextOpenPeriod(data, afterPeriod) {
+  return (data.periods || [])
+    .filter(function (p) { return p.status !== 'finalized' && p.startDate > afterPeriod.endDate; })
+    .sort(function (a, b) { return a.startDate < b.startDate ? -1 : 1; })[0] || null;
+}
+function periodForDate(data, dateStr) {
+  return (data.periods || []).find(function (p) { return dateStr >= p.startDate && dateStr <= p.endDate; }) || null;
 }
 
 /* ---------- overtime authorization computation ----------
@@ -301,7 +384,8 @@ app.post('/api/auth/reset', (req, res) => {
 });
 
 /* ================= COMPANY DATA (admin) ================= */
-app.get('/api/company', A.requireAdmin, (req, res) => {
+// Auditors (3rd-party, read-only) may load company data to view reports only.
+app.get('/api/company', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor'), (req, res) => {
   const row = getCompany();
   res.json({ name: row.name, version: row.data_version, data: JSON.parse(row.data_json), role: req.user.role });
 });
@@ -433,20 +517,42 @@ app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
   const data = getCompanyData();
   const applicant = db.prepare('SELECT employee_code FROM users WHERE id = ?').get(row.user_id);
   const emp = findEmpByCode(data, row.employee_code || (applicant && applicant.employee_code));
+  let carriedTo = null;
   if (emp) {
     data.otApprovals = data.otApprovals || {};
     const byDate = data.otApprovals[emp.id] = data.otApprovals[emp.id] || {};
     const day = byDate[row.ot_date] = byDate[row.ot_date] || {};
     day[row.ot_kind === 'before' ? 'before' : 'after'] = (decision === 'approved');
     if (!day.before && !day.after) delete byDate[row.ot_date];
+
+    // Carry-over: if the OT's own cutoff is already finalized, the pay can't go
+    // into that (locked) period — credit it to the next open cutoff instead.
+    if (decision === 'approved') {
+      const otPeriod = periodForDate(data, row.ot_date);
+      if (otPeriod && otPeriod.status === 'finalized') {
+        const dtrDay = (((data.dtr || {})[otPeriod.id] || {})[emp.id] || []).find(function (d) { return d.date === row.ot_date; });
+        const next = nextOpenPeriod(data, otPeriod);
+        if (dtrDay && next) {
+          const ot = engine.overtimeForDay(data, emp, dtrDay);
+          if (ot.amount > 0) {
+            data.adjustments = data.adjustments || {};
+            data.adjustments[next.id] = data.adjustments[next.id] || {};
+            const arr = data.adjustments[next.id][emp.id] = data.adjustments[next.id][emp.id] || [];
+            arr.push({ name: 'Overtime carried from ' + row.ot_date, amount: ot.amount, taxable: true, type: 'overtime', carriedFrom: row.ot_date });
+            carriedTo = next;
+          }
+        }
+      }
+    }
     try { saveCompanyData(data); companyChanged = true; } catch (e) { /* leave status set; payroll gating just won't see it yet */ }
   }
   const hrs = (row.ot_minutes / 60).toFixed(2);
   const kindLabel = row.ot_kind === 'before' ? 'pre-shift ' : '';
+  const carryNote = carriedTo ? ' Its cutoff was already finalized, so it will be paid on the next cutoff (' + carriedTo.name + ').' : '';
   notify(row.user_id, 'overtime', 'Overtime ' + decision,
-    'Your ' + kindLabel + 'overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.');
-  audit(req, decision, 'overtime request', (row.employee_code || ('user ' + row.user_id)) + ' ' + kindLabel + 'OT ' + row.ot_date + ' (' + hrs + 'h) ' + decision);
-  res.json({ ok: true, companyChanged: companyChanged });
+    'Your ' + kindLabel + 'overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.' + carryNote);
+  audit(req, decision, 'overtime request', (row.employee_code || ('user ' + row.user_id)) + ' ' + kindLabel + 'OT ' + row.ot_date + ' (' + hrs + 'h) ' + decision + (carriedTo ? ' → carried to ' + carriedTo.name : ''));
+  res.json({ ok: true, companyChanged: companyChanged, carriedTo: carriedTo ? carriedTo.name : null });
 });
 
 /* ---- loan applications (admin review) ---- */
@@ -813,6 +919,11 @@ function seedSuperadmin() {
   console.log('Seeded Super Admin:', email);
 }
 seedSuperadmin();
+
+// Scheduled maintenance: run shortly after boot, then every 6 hours. Jobs are
+// idempotent (deterministic period ids + one-time flags), so extra runs are safe.
+setTimeout(runDailyJobs, 4000);
+setInterval(runDailyJobs, 6 * 60 * 60 * 1000);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('PH Payroll server listening on port ' + PORT));

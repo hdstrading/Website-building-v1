@@ -8,7 +8,7 @@ const { db } = require('./db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-insecure-secret-change-me';
 const COOKIE = 'ph_session';
-const ROLES = ['superadmin', 'admin_payroll', 'finance', 'supervisor', 'employee'];
+const ROLES = ['superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor', 'employee'];
 // Roles allowed to see/administer full company payroll data.
 const ADMIN_ROLES = ['superadmin', 'admin_payroll', 'finance'];
 

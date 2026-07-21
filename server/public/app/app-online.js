@@ -7,7 +7,7 @@
  * ========================================================================== */
 (function (PH) {
   'use strict';
-  var ADMIN = ['superadmin', 'admin_payroll', 'finance'];
+  var ADMIN = ['superadmin', 'admin_payroll', 'finance', 'auditor'];
 
   function api(url, opts) {
     return fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts))
@@ -18,7 +18,7 @@
 
   function topbar(user) {
     canManage = user.role === 'superadmin' || user.role === 'admin_payroll';
-    var roleLabel = { superadmin: 'Super Admin', admin_payroll: 'Admin — Payroll', finance: 'Finance' }[user.role] || user.role;
+    var roleLabel = { superadmin: 'Super Admin', admin_payroll: 'Admin — Payroll', finance: 'Finance', auditor: 'Auditor (3rd-party)' }[user.role] || user.role;
     var bar = document.createElement('div');
     bar.className = 'topbar';
     bar.innerHTML =
@@ -42,7 +42,7 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
-  var ROLE_OPTS = [['employee', 'Employee'], ['supervisor', 'Supervisor'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
+  var ROLE_OPTS = [['employee', 'Employee'], ['supervisor', 'Supervisor'], ['auditor', 'Auditor (3rd-party)'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
 
   function openAccessPanel() {
     var ov = document.createElement('div');
@@ -269,6 +269,7 @@
       return api('/api/company').then(function (c) {
         if (!c.ok) { location.href = '/'; return; }
         window.__COMPANY__ = { data: c.body.data, version: c.body.version, role: c.body.role };
+        PH.role = c.body.role; // lets the shared UI restrict nav (e.g. auditor = reports only)
         PH.storage.load();
         PH.ui._setPrintCss(PH.PRINT_CSS || '');
         PH.onFinalize = onFinalize;

@@ -77,16 +77,24 @@
     ['backup', 'Backup & Data', '💾']
   ];
 
+  // Auditors (3rd-party, read-only) see only the report views.
+  var AUDITOR_VIEWS = ['reports', 'thirteenth', 'bir'];
+  function visibleViews() {
+    return (PH.role === 'auditor') ? VIEWS.filter(function (v) { return AUDITOR_VIEWS.indexOf(v[0]) >= 0; }) : VIEWS;
+  }
+
   function navigate(view) { state.view = view; render(); }
 
   function render() {
     var app = qs('#app');
+    // Keep auditors within their allowed views.
+    if (PH.role === 'auditor' && AUDITOR_VIEWS.indexOf(state.view) < 0) state.view = 'reports';
     app.innerHTML =
       '<aside class="sidebar">' +
         '<div class="brand"><span class="brand-mark">' + PH.BRAND_SVG + '</span>' +
           '<div><div class="brand-title">HDS Trading</div>' +
           '<div class="brand-sub">Payroll Solutions</div></div></div>' +
-        '<nav>' + VIEWS.map(function (v) {
+        '<nav>' + visibleViews().map(function (v) {
           return '<a href="#" class="nav-item ' + (state.view === v[0] ? 'active' : '') +
             '" data-nav="' + v[0] + '"><span class="nav-ico">' + v[2] + '</span>' + v[1] + '</a>';
         }).join('') + '</nav>' +
