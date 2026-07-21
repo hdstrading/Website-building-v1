@@ -228,54 +228,38 @@
     }
     function viewDTR() {
       api('/api/me/periods').then(function (r) {
-        var periods = r.body.periods.filter(function (p) { return p.status !== 'finalized'; });
+        var periods = r.body.periods || [];
         var opts = periods.map(function (p) { return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join('');
         document.getElementById('view').innerHTML =
           '<div class="card"><h2>My Daily Time Record</h2><div class="in">' +
+          '<p class="muted">Your time records are maintained by your administrator from the biometric device. This is a <b>view-only</b> record — if something looks wrong, please contact your administrator.</p>' +
           (periods.length ? '<label>Payroll period</label><select id="perSel" style="max-width:320px">' + opts + '</select>' +
             '<div id="dtrArea" style="margin-top:14px"></div>'
-            : '<p class="muted">No open payroll period to fill in yet.</p>') + '</div></div>';
+            : '<p class="muted">No payroll period to show yet.</p>') + '</div></div>';
         if (!periods.length) return;
         var sel = document.getElementById('perSel');
         sel.addEventListener('change', function () { loadDtr(sel.value, periods); });
         loadDtr(sel.value, periods);
       });
     }
+    function fmtFlag(d) {
+      if (d.absent) return 'Absent';
+      if (d.leaveType) return d.leaveType + ' leave';
+      if (d.restDay) return 'Rest day';
+      return '';
+    }
     function loadDtr(pid, periods) {
-      var period = periods.filter(function (p) { return p.id === pid; })[0];
       api('/api/me/dtr/' + pid).then(function (r) {
-        var existing = r.body.days || [];
-        var restDow = (state.profile.employee && state.profile.employee.restDay != null) ? parseInt(state.profile.employee.restDay, 10) : -1;
-        var days = existing.length ? existing : coverageDays(period, restDow);
-        var emp = state.profile.employee || {};
-        var rows = days.map(function (d, i) {
+        var days = r.body.days || [];
+        var rows = days.map(function (d) {
           return '<tr><td>' + esc(d.date || '') + '</td>' +
-            '<td><input name="in" value="' + esc(d.timeIn || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '" style="width:90px"></td>' +
-            '<td><input name="out" value="' + esc(d.timeOut || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '" style="width:90px"></td>' +
-            '<td style="text-align:center"><input name="rest" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
-            '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
-            '<td><select name="leave"><option value="">—</option>' +
-            ['SL', 'VL', 'EL'].map(function (t) { return '<option' + (d.leaveType === t ? ' selected' : '') + '>' + t + '</option>'; }).join('') +
-            '</select></td></tr>';
+            '<td>' + esc(d.timeIn || '—') + '</td>' +
+            '<td>' + esc(d.timeOut || '—') + '</td>' +
+            '<td>' + esc(fmtFlag(d) || '—') + '</td></tr>';
         }).join('');
-        document.getElementById('dtrArea').innerHTML =
-          '<div class="scroll"><table><thead><tr><th>Date</th><th>In</th><th>Out</th><th>Rest</th><th>Absent</th><th>Leave</th></tr></thead>' +
-          '<tbody id="dtrRows">' + rows + '</tbody></table></div>' +
-          '<button class="btn" id="dtrSave" style="margin-top:12px">Submit DTR</button><span id="dtrMsg" class="msg"></span>';
-        document.getElementById('dtrSave').addEventListener('click', function () {
-          var out = [];
-          document.querySelectorAll('#dtrRows tr').forEach(function (tr, i) {
-            var g = function (n) { return tr.querySelector('[name=' + n + ']'); };
-            var lt = g('leave').value;
-            out.push({ date: days[i].date, timeIn: g('in').value, timeOut: g('out').value,
-              restDay: g('rest').checked, absent: g('absent').checked, leaveType: lt, leavePaid: !!lt, dayType: 'regular' });
-          });
-          api('/api/me/dtr/' + pid, { method: 'POST', body: JSON.stringify({ days: out }) }).then(function (res) {
-            var m = document.getElementById('dtrMsg');
-            m.textContent = res.ok ? '  ✓ Submitted' : ('  ' + (res.body.error || 'Failed'));
-            m.className = 'msg ' + (res.ok ? 'ok' : 'err');
-          });
-        });
+        document.getElementById('dtrArea').innerHTML = days.length
+          ? '<div class="scroll"><table><thead><tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Notes</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+          : '<p class="muted">No time records for this period yet.</p>';
       });
     }
 

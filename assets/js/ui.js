@@ -21,6 +21,43 @@
     });
   };
   var hrs = function (mins) { return (mins / 60).toFixed(2) + 'h'; };
+
+  /* ---- Government ID validation (format + duplicate check) ----
+   * No public agency API exists to confirm a number is registered to a person,
+   * so we validate the digit-count format and flag duplicates/blanks — which
+   * catches the typos and collisions that cause rejected remittances. */
+  var GOV_ID = {
+    sss:        { label: 'SSS',        field: 'sssNo',        digits: [10] },
+    philhealth: { label: 'PhilHealth', field: 'philhealthNo', digits: [12] },
+    pagibig:    { label: 'Pag-IBIG',   field: 'pagibigNo',    digits: [12] },
+    tin:        { label: 'TIN',        field: 'tin',          digits: [9, 12, 13] } // 9 base + optional branch
+  };
+  var GOV_ID_KEYS = ['sss', 'philhealth', 'pagibig', 'tin'];
+  function digitsOf(v) { return String(v == null ? '' : v).replace(/\D/g, ''); }
+  // Returns null if OK, else { level:'missing'|'invalid', msg }.
+  function govIdIssue(type, value) {
+    var rule = GOV_ID[type]; if (!rule) return null;
+    if (!String(value || '').trim()) return { level: 'missing', msg: rule.label + ' number is missing' };
+    var d = digitsOf(value);
+    if (rule.digits.indexOf(d.length) < 0)
+      return { level: 'invalid', msg: rule.label + ' should be ' + rule.digits.join(' or ') + ' digits (you entered ' + d.length + ')' };
+    return null;
+  }
+  // Set of employee ids that share a gov-id number with someone else, per type.
+  function govIdDuplicateMap(employees) {
+    var out = {}; // type -> { empId: true }
+    GOV_ID_KEYS.forEach(function (type) {
+      var byDigits = {};
+      employees.forEach(function (e) {
+        var d = digitsOf(e[GOV_ID[type].field]); if (!d) return;
+        (byDigits[d] = byDigits[d] || []).push(e.id);
+      });
+      Object.keys(byDigits).forEach(function (dg) {
+        if (byDigits[dg].length > 1) byDigits[dg].forEach(function (id) { (out[type] = out[type] || {})[id] = true; });
+      });
+    });
+    return out;
+  }
   var cap = function (s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—'; };
   var qs = function (sel, root) { return (root || document).querySelector(sel); };
 
@@ -144,7 +181,8 @@
         '<button class="btn-sm btn-danger" data-emp-del="' + e.id + '">Delete</button></td></tr>';
     }).join('') : '<tr><td colspan="8" class="muted">No employees yet. Click "Add Employee".</td></tr>';
 
-    v.innerHTML = card('Employees',
+    v.innerHTML = govIdCheckCard(emps.filter(function (e) { return e.active !== false; })) +
+      card('Employees',
       '<table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Position</th><th>Type</th>' +
       '<th>Basic</th><th>Daily Rate</th><th>Status</th><th></th></tr></thead><tbody>' +
       rows + '</tbody></table>',
@@ -162,6 +200,33 @@
         if (confirm('Delete this employee?')) { S.remove('employees', b.dataset.empDel); renderView(); }
       });
     });
+  }
+
+  // Summary card of government-ID problems across active employees.
+  function govIdCheckCard(emps) {
+    var dupMap = govIdDuplicateMap(emps);
+    var issues = [];
+    emps.forEach(function (e) {
+      var probs = [];
+      GOV_ID_KEYS.forEach(function (type) {
+        var iss = govIdIssue(type, e[GOV_ID[type].field]);
+        if (iss) probs.push(iss.msg);
+        if (dupMap[type] && dupMap[type][e.id]) probs.push(GOV_ID[type].label + ' number is duplicated with another employee');
+      });
+      if (probs.length) issues.push({ name: e.lastName + ', ' + e.firstName + ' (' + (e.code || '—') + ')', probs: probs });
+    });
+    if (!emps.length) return '';
+    if (!issues.length) {
+      return card('Government ID Check',
+        '<p style="color:var(--ok);margin:0"><b>✓ All ' + emps.length + ' active employees</b> have SSS, PhilHealth, Pag-IBIG and TIN numbers in a valid format with no duplicates.</p>');
+    }
+    var list = issues.map(function (it) {
+      return '<li><b>' + esc(it.name) + '</b><ul>' + it.probs.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ul></li>';
+    }).join('');
+    return card('Government ID Check',
+      '<p class="muted">These issues can cause rejected SSS/PhilHealth/Pag-IBIG/BIR remittances. Fix them before filing. ' +
+      '(A valid format is checked here; the agencies remain the authority on whether a number belongs to a person.)</p>' +
+      '<div style="color:var(--warn)"><b>' + issues.length + ' employee(s)</b> need attention:</div><ul class="idcheck">' + list + '</ul>');
   }
 
   function employeeForm(emp) {
@@ -251,6 +316,18 @@
       data.deductPhilHealth = data.deductPhilHealth === 'true';
       data.deductPagIBIG = data.deductPagIBIG === 'true';
       if (!data.code || !data.lastName) { alert('Code and Last Name are required.'); return false; }
+      // Warn (but allow override) on malformed or duplicated government IDs.
+      var idProblems = [];
+      var others = S.list('employees').filter(function (e) { return e.id !== data.id; });
+      GOV_ID_KEYS.forEach(function (type) {
+        var f = GOV_ID[type].field;
+        var iss = govIdIssue(type, data[f]);
+        if (iss && iss.level === 'invalid') idProblems.push(iss.msg);
+        var d = digitsOf(data[f]);
+        if (d && others.some(function (e) { return digitsOf(e[f]) === d; }))
+          idProblems.push(GOV_ID[type].label + ' number is already used by another employee');
+      });
+      if (idProblems.length && !confirm('Please double-check these government IDs:\n\n• ' + idProblems.join('\n• ') + '\n\nSave anyway?')) return false;
       S.upsert('employees', data);
       renderView();
     }, 'wide');
@@ -264,6 +341,16 @@
     var r = PH.payroll.rates(emp);
     function row(label, val) {
       return '<tr><td class="f201-l">' + label + '</td><td>' + esc(val || '—') + '</td></tr>';
+    }
+    // Government-ID row with a format/duplicate validity mark.
+    var dupMap = govIdDuplicateMap(S.list('employees'));
+    function idRow(type) {
+      var rule = GOV_ID[type], val = emp[rule.field], iss = govIdIssue(type, val), mark;
+      if (!val) mark = ' <span class="muted">— missing</span>';
+      else if (iss && iss.level === 'invalid') mark = ' <span style="color:var(--warn)" title="' + esc(iss.msg) + '">⚠ check format</span>';
+      else mark = ' <span style="color:var(--ok)">✓</span>';
+      if (dupMap[type] && dupMap[type][emp.id]) mark += ' <span style="color:var(--danger)" title="Same number used by another employee">⚠ duplicate</span>';
+      return '<tr><td class="f201-l">' + rule.label + ' No.</td><td>' + esc(val || '—') + mark + '</td></tr>';
     }
     var loanRows = loans.length ? loans.map(function (l) {
       return '<tr><td>' + esc(l.type) + (l.reference ? ' — ' + esc(l.reference) : '') +
@@ -298,8 +385,7 @@
           row('Status', emp.active !== false ? 'Active' : 'Inactive') +
           '</table></div>' +
         '<div><h4>Government IDs</h4><table class="f201-tbl">' +
-          row('SSS No.', emp.sssNo) + row('PhilHealth No.', emp.philhealthNo) +
-          row('Pag-IBIG No.', emp.pagibigNo) + row('TIN', emp.tin) +
+          idRow('sss') + idRow('philhealth') + idRow('pagibig') + idRow('tin') +
           row('Deductions', 'SSS: ' + (emp.deductSSS !== false ? 'Yes' : 'No') +
             ' · PhilHealth: ' + (emp.deductPhilHealth !== false ? 'Yes' : 'No') +
             ' · Pag-IBIG: ' + (emp.deductPagIBIG !== false ? 'Yes' : 'No')) + '</table></div>' +
