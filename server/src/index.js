@@ -50,6 +50,63 @@ function notify(userId, type, title, body) {
       .run(userId, type, title, body || '');
   } catch (e) { console.error('notify failed', e.message); }
 }
+/* ---------- audit trail ---------- */
+// Record who changed what and when (mutations only — never views).
+function audit(req, action, entity, detail) {
+  try {
+    const u = req && req.user;
+    db.prepare('INSERT INTO audit_log (user_id, user_email, role, action, entity, detail) VALUES (?,?,?,?,?,?)')
+      .run(u ? u.id : null, u ? u.email : null, u ? u.role : null, action, entity, String(detail || '').slice(0, 500));
+  } catch (e) { console.error('audit failed', e.message); }
+}
+// Human-readable diff of two company-data documents → [{action, entity, detail}].
+function diffCompanyData(oldD, newD) {
+  oldD = oldD || {}; newD = newD || {};
+  const changes = [];
+  function byId(arr) { const m = {}; (arr || []).forEach(function (x) { if (x && x.id) m[x.id] = x; }); return m; }
+  function val(x) { return x == null ? '—' : (typeof x === 'object' ? JSON.stringify(x) : String(x)); }
+  function diffList(entity, oldArr, newArr, labelFn, fields) {
+    const o = byId(oldArr), n = byId(newArr);
+    Object.keys(n).forEach(function (id) {
+      if (!o[id]) { changes.push({ action: 'create', entity: entity, detail: 'Added ' + labelFn(n[id]) }); return; }
+      const chg = [];
+      fields.forEach(function (f) { if (val(o[id][f]) !== val(n[id][f])) chg.push(f + ': ' + val(o[id][f]) + ' → ' + val(n[id][f])); });
+      if (chg.length) changes.push({ action: 'update', entity: entity, detail: 'Edited ' + labelFn(n[id]) + ' — ' + chg.join('; ') });
+    });
+    Object.keys(o).forEach(function (id) { if (!n[id]) changes.push({ action: 'delete', entity: entity, detail: 'Removed ' + labelFn(o[id]) }); });
+  }
+  const empL = function (e) { return (e.lastName || '') + ', ' + (e.firstName || '') + ' [' + (e.code || e.id) + ']'; };
+  diffList('employee', oldD.employees, newD.employees, empL,
+    ['code', 'lastName', 'firstName', 'basicSalary', 'employmentType', 'employmentStatus', 'active',
+     'sssNo', 'philhealthNo', 'pagibigNo', 'tin', 'deductSSS', 'deductPhilHealth', 'deductPagIBIG',
+     'schedTimeIn', 'schedTimeOut', 'leaveCreditsPerYear', 'leaveCreditsUsed', 'bankAccountNumber']);
+  diffList('allowance', oldD.allowances, newD.allowances, function (a) { return (a.name || 'allowance') + ' [' + a.id + ']'; },
+    ['employeeId', 'name', 'amount', 'type', 'taxable', 'basis']);
+  diffList('loan', oldD.loans, newD.loans, function (l) { return (l.type || 'loan') + ' [' + l.id + ']'; },
+    ['employeeId', 'type', 'principal', 'monthlyAmortization', 'perCutoffAmount', 'balance', 'active']);
+  diffList('period', oldD.periods, newD.periods, function (p) { return (p.name || p.id); },
+    ['name', 'startDate', 'endDate', 'payDate', 'status', 'frequency']);
+  // Settings blocks
+  const meta = function (d) { return d.meta || {}; };
+  ['company', 'overtime', 'leavePolicy', 'thirteenthPolicy'].forEach(function (k) {
+    if (JSON.stringify(meta(oldD)[k]) !== JSON.stringify(meta(newD)[k]))
+      changes.push({ action: 'update', entity: 'settings', detail: k + ' changed to ' + val(meta(newD)[k]) });
+  });
+  if (JSON.stringify(oldD.statutoryConfig) !== JSON.stringify(newD.statutoryConfig))
+    changes.push({ action: 'update', entity: 'settings', detail: 'Government rate tables changed' });
+  if (JSON.stringify(oldD.otApprovals) !== JSON.stringify(newD.otApprovals))
+    changes.push({ action: 'update', entity: 'overtime', detail: 'Overtime authorizations updated' });
+  // DTR + payroll results per period
+  Object.keys(newD.dtr || {}).forEach(function (pid) {
+    if (JSON.stringify((oldD.dtr || {})[pid]) !== JSON.stringify(newD.dtr[pid]))
+      changes.push({ action: 'update', entity: 'DTR', detail: 'Time records updated for period ' + pid });
+  });
+  Object.keys(newD.payrolls || {}).forEach(function (pid) {
+    if (JSON.stringify((oldD.payrolls || {})[pid]) !== JSON.stringify(newD.payrolls[pid]))
+      changes.push({ action: 'update', entity: 'payroll', detail: 'Payroll results updated for period ' + pid });
+  });
+  return changes;
+}
 
 /* ---------- leave application window ----------
  * Governs when an employee may file leave. Shared rule (mirrored in the portal):
@@ -252,8 +309,12 @@ app.get('/api/company', A.requireAdmin, (req, res) => {
 app.put('/api/company', A.requireRole('superadmin', 'admin_payroll'), (req, res) => {
   const { data, version } = req.body || {};
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Missing data.' });
+  const before = getCompanyData(); // capture prior state for the audit diff
   try {
     const v = saveCompanyData(data, version);
+    // Log each meaningful change (who/what/when) for the superadmin history.
+    const changes = diffCompanyData(before, data).slice(0, 60);
+    changes.forEach(function (c) { audit(req, c.action, c.entity, c.detail); });
     res.json({ ok: true, version: v });
   } catch (e) {
     if (e.code === 'CONFLICT') return res.status(409).json({ error: e.message });
@@ -302,6 +363,7 @@ app.post('/api/admin/users/:id/approve', adminMgmt, (req, res) => {
   }
   db.prepare('UPDATE users SET status = \'active\', role = ?, employee_code = ? WHERE id = ?')
     .run(newRole, code, user.id);
+  audit(req, 'update', 'user', 'Approved ' + user.email + ' as ' + newRole + (code ? ' (' + code + ')' : ''));
   res.json({ ok: true });
 });
 
@@ -315,13 +377,16 @@ app.post('/api/admin/users/:id/role', adminMgmt, (req, res) => {
     if (supers <= 1) return res.status(400).json({ error: 'There must be at least one Super Admin.' });
   }
   db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+  audit(req, 'update', 'user', 'Role of ' + (target ? target.email : req.params.id) + ' → ' + role);
   res.json({ ok: true });
 });
 
 app.post('/api/admin/users/:id/status', adminMgmt, (req, res) => {
   const { status } = req.body || {};
   if (['active', 'disabled', 'pending'].indexOf(status) < 0) return res.status(400).json({ error: 'Invalid status.' });
+  const tgt = db.prepare('SELECT email FROM users WHERE id = ?').get(req.params.id);
   db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, req.params.id);
+  audit(req, 'update', 'user', 'Status of ' + (tgt ? tgt.email : req.params.id) + ' → ' + status);
   res.json({ ok: true });
 });
 
@@ -342,6 +407,7 @@ app.post('/api/admin/leave-requests/:id', canDecide, (req, res) => {
     .run(decision, req.user.id, req.params.id);
   notify(row.user_id, 'leave', 'Leave ' + decision,
     row.leave_type + ' leave for ' + row.date_from + (row.date_to !== row.date_from ? ' → ' + row.date_to : '') + ' was ' + decision + '.');
+  audit(req, decision, 'leave request', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.leave_type + ' ' + row.date_from + '→' + row.date_to + ' ' + decision);
   res.json({ ok: true });
 });
 
@@ -379,6 +445,7 @@ app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
   const kindLabel = row.ot_kind === 'before' ? 'pre-shift ' : '';
   notify(row.user_id, 'overtime', 'Overtime ' + decision,
     'Your ' + kindLabel + 'overtime for ' + row.ot_date + ' (' + hrs + ' hr' + (hrs === '1.00' ? '' : 's') + ') was ' + decision + '.');
+  audit(req, decision, 'overtime request', (row.employee_code || ('user ' + row.user_id)) + ' ' + kindLabel + 'OT ' + row.ot_date + ' (' + hrs + 'h) ' + decision);
   res.json({ ok: true, companyChanged: companyChanged });
 });
 
@@ -409,6 +476,7 @@ app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
       .run(req.user.id, reqRow.id);
     notify(reqRow.user_id, 'loan', 'Loan application rejected',
       (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') + ' was not approved.');
+    audit(req, 'reject', 'loan request', (reqRow.employee_code || ('user ' + reqRow.user_id)) + ' ' + (LOAN_TYPES[reqRow.loan_type] || reqRow.loan_type) + ' ₱' + reqRow.amount + ' rejected');
     return res.json({ ok: true });
   }
 
@@ -449,6 +517,7 @@ app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
   notify(reqRow.user_id, 'loan', 'Loan application approved',
     (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') +
     ' approved — ' + deductDesc + '.');
+  audit(req, 'approve', 'loan request', (reqRow.employee_code || ('user ' + reqRow.user_id)) + ' ' + (LOAN_TYPES[reqRow.loan_type] || reqRow.loan_type) + ' ₱' + reqRow.amount + ' approved (' + deductDesc + ')');
   res.json({ ok: true, loanId: loanId, companyVersion: version });
 });
 
@@ -461,7 +530,23 @@ app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
   if (!pw) { pw = Math.random().toString(36).slice(2, 10); generated = true; }
   if (String(pw).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(pw), user.id);
+  audit(req, 'update', 'user', 'Reset password for ' + user.email);
   res.json({ ok: true, password: generated ? pw : undefined });
+});
+
+// Superadmin: system change history (who / what / when). Views are not logged.
+app.get('/api/admin/audit-log', A.requireRole('superadmin'), (req, res) => {
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+  const q = String(req.query.q || '').trim();
+  let rows;
+  if (q) {
+    const like = '%' + q + '%';
+    rows = db.prepare('SELECT * FROM audit_log WHERE user_email LIKE ? OR action LIKE ? OR entity LIKE ? OR detail LIKE ? ORDER BY id DESC LIMIT ?')
+      .all(like, like, like, like, limit);
+  } else {
+    rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT ?').all(limit);
+  }
+  res.json({ entries: rows });
 });
 
 // Email employees that their payslip for a finalized period is ready.
@@ -496,6 +581,7 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
       if (r && r.skipped) skipped++; else sent++;
     } catch (e) { skipped++; }
   }
+  audit(req, 'notify', 'payslips', 'Sent payslip notifications for ' + period.name + ' (' + notified + ' employee(s))');
   res.json({ ok: true, sent, skipped, notified, emailConfigured: mailer.configured() });
 });
 

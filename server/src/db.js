@@ -103,6 +103,18 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL DEFAULT (datetime('now')),
+  user_id INTEGER,
+  user_email TEXT,
+  role TEXT,
+  action TEXT NOT NULL,        -- create | update | delete | approve | reject | login-reset | notify | finalize
+  entity TEXT NOT NULL,        -- what was changed (employee, loan, company settings, user, …)
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
 `);
 
 // Migrate older overtime_requests created before ot_kind existed.

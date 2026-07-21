@@ -116,8 +116,11 @@
       var o = {}; new FormData(form).forEach(function (v, k) { o[k] = v; }); return o;
     }
     function redirectByRole(role) {
-      location.href = (role === 'employee') ? '/portal' : '/app';
+      location.href = (role === 'employee' || role === 'supervisor') ? '/portal' : '/app';
     }
+
+    // Signed out due to inactivity?
+    if (/[?&]timeout=1/.test(location.search)) showMsg('You were signed out after 5 minutes of inactivity. Please sign in again.');
 
     // Already signed in? go straight in.
     fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (j) {

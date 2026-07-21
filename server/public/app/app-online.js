@@ -47,8 +47,10 @@
   function openAccessPanel() {
     var ov = document.createElement('div');
     ov.className = 'acc-overlay';
+    var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a></div>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a>' +
+      (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
     ov.querySelector('.acc-x').onclick = function () { ov.remove(); };
@@ -63,6 +65,7 @@
       if (tab === 'leave') return api('/api/admin/leave-requests').then(function (r) { renderLeave(r.body.requests || []); });
       if (tab === 'overtime') return api('/api/admin/overtime-requests').then(function (r) { renderOvertime(r.body.requests || []); });
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
+      if (tab === 'history') return api('/api/admin/audit-log').then(function (r) { renderHistory((r.body || {}).entries || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
 
@@ -163,6 +166,32 @@
         }
         if (ok) ok.onclick = function () { decide('approved'); };
         if (no) no.onclick = function () { decide('rejected'); };
+      });
+    }
+
+    function renderHistory(entries) {
+      var head = '<p class="acc-muted">Every change made in the system — who, what and when. Filter below. (Viewing is not logged.)</p>' +
+        '<input id="hist-q" placeholder="Filter by person, action, entity or detail…" style="width:100%;padding:8px 10px;border:1px solid #e2e8f0;border-radius:7px;margin-bottom:8px">';
+      if (!entries.length) { body.innerHTML = head + '<p class="acc-muted">No changes recorded yet.</p>'; bindHistFilter(); return; }
+      body.innerHTML = head + '<table class="acc-tbl"><thead><tr><th>When (UTC)</th><th>Who</th><th>Role</th><th>Action</th><th>What</th></tr></thead><tbody>' +
+        entries.map(function (e) {
+          return '<tr><td style="white-space:nowrap">' + esc(e.at) + '</td><td>' + esc(e.user_email || '—') + '</td>' +
+            '<td>' + esc(e.role || '—') + '</td><td><span class="acc-badge">' + esc(e.action) + '</span> ' + esc(e.entity) + '</td>' +
+            '<td>' + esc(e.detail || '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      bindHistFilter();
+    }
+    function bindHistFilter() {
+      var q = document.getElementById('hist-q'); if (!q) return;
+      var t = null;
+      q.addEventListener('input', function () {
+        clearTimeout(t);
+        t = setTimeout(function () {
+          api('/api/admin/audit-log?q=' + encodeURIComponent(q.value)).then(function (r) {
+            var val = q.value; renderHistory((r.body || {}).entries || []);
+            var q2 = document.getElementById('hist-q'); if (q2) { q2.value = val; q2.focus(); }
+          });
+        }, 300);
       });
     }
 
