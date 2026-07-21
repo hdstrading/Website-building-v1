@@ -263,6 +263,10 @@ app.put('/api/company', A.requireRole('superadmin', 'admin_payroll'), (req, res)
 
 /* ================= ADMIN: users & leave ================= */
 const adminMgmt = A.requireRole('superadmin', 'admin_payroll');
+// Supervisors can review & decide leave / overtime / product-advance requests
+// and view employees' DTR — but not touch payroll, users or company settings.
+const canReview = A.requireRole('superadmin', 'admin_payroll', 'finance', 'supervisor');
+const canDecide = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
 
 app.get('/api/admin/users', adminMgmt, (req, res) => {
   const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
@@ -280,7 +284,8 @@ app.post('/api/admin/users/:id/approve', adminMgmt, (req, res) => {
   let code = employeeCode || user.employee_code || null;
 
   // Optionally create an employee (201) record in company data from the sign-up profile.
-  if (createEmployee && newRole === 'employee') {
+  // Supervisors are employees too, so they also get a 201.
+  if (createEmployee && (newRole === 'employee' || newRole === 'supervisor')) {
     const data = getCompanyData();
     const profile = JSON.parse(user.profile_json || '{}');
     code = code || profile.code || ('EMP-' + String(user.id).padStart(4, '0'));
@@ -320,7 +325,7 @@ app.post('/api/admin/users/:id/status', adminMgmt, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/admin/leave-requests', A.requireAdmin, (req, res) => {
+app.get('/api/admin/leave-requests', canReview, (req, res) => {
   const rows = db.prepare(
     `SELECT lr.*, u.full_name, u.email FROM leave_requests lr JOIN users u ON u.id = lr.user_id
      ORDER BY (lr.status = 'pending') DESC, lr.created_at DESC`
@@ -328,7 +333,7 @@ app.get('/api/admin/leave-requests', A.requireAdmin, (req, res) => {
   res.json({ requests: rows });
 });
 
-app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
+app.post('/api/admin/leave-requests/:id', canDecide, (req, res) => {
   const { decision } = req.body || {}; // 'approved' | 'rejected'
   if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
   const row = db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(req.params.id);
@@ -341,14 +346,14 @@ app.post('/api/admin/leave-requests/:id', adminMgmt, (req, res) => {
 });
 
 /* ---- overtime authorization (admin review) ---- */
-app.get('/api/admin/overtime-requests', A.requireAdmin, (req, res) => {
+app.get('/api/admin/overtime-requests', canReview, (req, res) => {
   const rows = db.prepare(
     `SELECT o.*, u.full_name, u.email FROM overtime_requests o JOIN users u ON u.id = o.user_id
      ORDER BY (o.status = 'pending') DESC, o.ot_date DESC, o.created_at DESC`
   ).all();
   res.json({ requests: rows.map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
 });
-app.post('/api/admin/overtime-requests/:id', adminMgmt, (req, res) => {
+app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
   const { decision } = req.body || {};
   if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
   const row = db.prepare('SELECT * FROM overtime_requests WHERE id = ?').get(req.params.id);
@@ -378,20 +383,25 @@ app.post('/api/admin/overtime-requests/:id', adminMgmt, (req, res) => {
 });
 
 /* ---- loan applications (admin review) ---- */
-app.get('/api/admin/loan-requests', A.requireAdmin, (req, res) => {
-  const rows = db.prepare(
+app.get('/api/admin/loan-requests', canReview, (req, res) => {
+  let rows = db.prepare(
     `SELECT lr.*, u.full_name, u.email FROM loan_requests lr JOIN users u ON u.id = lr.user_id
      ORDER BY (lr.status = 'pending') DESC, lr.created_at DESC`
   ).all();
+  // Supervisors only handle product advances.
+  if (req.user.role === 'supervisor') rows = rows.filter(function (r) { return r.loan_type === 'product_advance'; });
   res.json({ requests: rows.map(function (r) { return Object.assign(r, { loan_type_label: LOAN_TYPES[r.loan_type] || r.loan_type }); }) });
 });
 
 // Approve (creating a payroll loan that is auto-deducted) or reject a loan request.
-app.post('/api/admin/loan-requests/:id', adminMgmt, (req, res) => {
+app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
   const { decision, monthlyAmortization } = req.body || {};
   if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
   const reqRow = db.prepare('SELECT * FROM loan_requests WHERE id = ?').get(req.params.id);
   if (!reqRow) return res.status(404).json({ error: 'Loan request not found.' });
+  // Supervisors may only decide product advances (not cash advances or gov't loans).
+  if (req.user.role === 'supervisor' && reqRow.loan_type !== 'product_advance')
+    return res.status(403).json({ error: 'Supervisors can only approve product advances.' });
   if (reqRow.status !== 'pending') return res.status(400).json({ error: 'This request has already been decided.' });
 
   if (decision === 'rejected') {
@@ -487,6 +497,28 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
     } catch (e) { skipped++; }
   }
   res.json({ ok: true, sent, skipped, notified, emailConfigured: mailer.configured() });
+});
+
+/* ================= SUPERVISOR (view-only team DTR) ================= */
+// Minimal employee roster (no salaries) for supervisors to pick from.
+app.get('/api/sup/employees', canReview, (req, res) => {
+  const data = getCompanyData();
+  res.json({ employees: (data.employees || []).filter(function (e) { return e.active !== false; }).map(function (e) {
+    return { id: e.id, code: e.code, firstName: e.firstName, lastName: e.lastName, position: e.position,
+      schedTimeIn: e.schedTimeIn, schedTimeOut: e.schedTimeOut };
+  }) });
+});
+// One employee's DTR for a period (read-only).
+app.get('/api/sup/dtr/:periodId/:empId', canReview, (req, res) => {
+  const data = getCompanyData();
+  const period = (data.periods || []).find(function (p) { return p.id === req.params.periodId; });
+  const days = ((data.dtr[req.params.periodId] || {})[req.params.empId]) || [];
+  res.json({ period: period || null, days: days });
+});
+// Periods list for supervisors (name/status only).
+app.get('/api/sup/periods', canReview, (req, res) => {
+  const data = getCompanyData();
+  res.json({ periods: (data.periods || []).map(function (p) { return { id: p.id, name: p.name, status: p.status }; }) });
 });
 
 /* ================= EMPLOYEE SELF-SERVICE ================= */

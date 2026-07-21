@@ -170,23 +170,35 @@
       var p = document.getElementById('npanel');
       if (p.classList.contains('open') && !p.contains(e.target) && e.target.id !== 'bell') p.classList.remove('open');
     });
-    document.querySelectorAll('nav.tabs a').forEach(function (a) {
-      a.addEventListener('click', function (e) { e.preventDefault(); go(a.dataset.tab); });
+    // Event-delegated tabs (so supervisor tabs added at runtime work too).
+    document.querySelector('nav.tabs').addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('a[data-tab]');
+      if (!a) return; e.preventDefault(); go(a.dataset.tab);
     });
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
-      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, overtime: viewOvertime, loans: viewLoans, payslips: viewPayslips })[tab]();
+      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, overtime: viewOvertime, loans: viewLoans,
+         payslips: viewPayslips, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
     // ---- bootstrap ----
     api('/api/auth/me').then(function (me) {
       if (!me.body.user) { location.href = '/'; return; }
-      if (me.body.user.role !== 'employee') { location.href = '/app'; return; }
+      var role = me.body.user.role;
+      if (role !== 'employee' && role !== 'supervisor') { location.href = '/app'; return; }
+      state.isSupervisor = role === 'supervisor';
+      // Supervisors get extra tabs: view-only team DTR + approvals.
+      if (state.isSupervisor) {
+        var nav = document.querySelector('nav.tabs');
+        nav.insertAdjacentHTML('beforeend',
+          '<a href="#" data-tab="teamdtr">Team DTR</a><a href="#" data-tab="approvals">Approvals</a>');
+      }
       return api('/api/me/profile').then(function (p) {
         state.profile = p.body;
         document.getElementById('whoName').textContent = p.body.user.fullName || p.body.user.email;
         var emp = p.body.employee;
-        document.getElementById('whoMeta').textContent = emp ? (emp.position || '') + (emp.code ? ' • ' + emp.code : '') : 'Awaiting 201 link';
+        var supTag = state.isSupervisor ? ' • Supervisor' : '';
+        document.getElementById('whoMeta').textContent = (emp ? (emp.position || '') + (emp.code ? ' • ' + emp.code : '') : 'Awaiting 201 link') + supTag;
         go('profile');
         pollNotifs();
         setInterval(pollNotifs, 45000);
@@ -629,6 +641,96 @@
         '</div></div>';
       document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });
       document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // ---- Supervisor: Team DTR (view-only) ----
+    function viewTeamDtr() {
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Team DTR — view only</h2><div class="in">' +
+        '<p class="muted">View any employee\'s time records for a period. Read-only — corrections are made by the payroll admin.</p>' +
+        '<div class="grid2"><div><label>Employee</label><select id="tdEmp"></select></div>' +
+        '<div><label>Payroll period</label><select id="tdPer"></select></div></div>' +
+        '<div id="tdArea" class="scroll" style="margin-top:14px"></div></div></div>';
+      Promise.all([api('/api/sup/employees'), api('/api/sup/periods')]).then(function (res) {
+        var emps = (res[0].body || {}).employees || [], pers = (res[1].body || {}).periods || [];
+        document.getElementById('tdEmp').innerHTML = emps.map(function (e) { return '<option value="' + e.id + '">' + esc(e.lastName + ', ' + e.firstName) + (e.code ? ' (' + esc(e.code) + ')' : '') + '</option>'; }).join('');
+        document.getElementById('tdPer').innerHTML = pers.map(function (p) { return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join('');
+        function load() {
+          var eid = document.getElementById('tdEmp').value, pid = document.getElementById('tdPer').value;
+          if (!eid || !pid) { document.getElementById('tdArea').innerHTML = '<p class="muted">No employees or periods yet.</p>'; return; }
+          api('/api/sup/dtr/' + pid + '/' + eid).then(function (r) {
+            var days = (r.body || {}).days || [];
+            var rows = days.map(function (d) { return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(d.timeIn || '—') + '</td><td>' + esc(d.timeOut || '—') + '</td><td>' + esc(fmtFlag(d) || '—') + '</td></tr>'; }).join('');
+            document.getElementById('tdArea').innerHTML = days.length
+              ? '<table><thead><tr><th>Date</th><th>Time In</th><th>Time Out</th><th>Notes</th></tr></thead><tbody>' + rows + '</tbody></table>'
+              : '<p class="muted">No time records for this period.</p>';
+          });
+        }
+        document.getElementById('tdEmp').addEventListener('change', load);
+        document.getElementById('tdPer').addEventListener('change', load);
+        if (emps.length && pers.length) load(); else document.getElementById('tdArea').innerHTML = '<p class="muted">No employees or periods yet.</p>';
+      });
+    }
+
+    // ---- Supervisor: Approvals (leave / overtime / product advances) ----
+    function viewApprovals() {
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Approvals</h2><div class="in">' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<button class="btn ghost sm apv-seg" data-seg="leave">Leave</button>' +
+        '<button class="btn ghost sm apv-seg" data-seg="overtime">Overtime</button>' +
+        '<button class="btn ghost sm apv-seg" data-seg="loans">Product Advances</button>' +
+        '</div><div id="apvArea">Loading…</div></div></div>';
+      document.querySelectorAll('.apv-seg').forEach(function (b) { b.addEventListener('click', function () { apvLoad(b.dataset.seg); }); });
+      apvLoad('leave');
+    }
+    function apvActions(x) {
+      return x.status === 'pending'
+        ? '<button class="btn sm" data-ok="' + x.id + '">Approve</button> <button class="btn ghost sm" data-no="' + x.id + '">Reject</button>'
+        : '';
+    }
+    function apvBind(area, url, seg) {
+      area.querySelectorAll('[data-ok]').forEach(function (b) { b.addEventListener('click', function () { apvDecide(url, b.dataset.ok, 'approved', seg); }); });
+      area.querySelectorAll('[data-no]').forEach(function (b) { b.addEventListener('click', function () { apvDecide(url, b.dataset.no, 'rejected', seg); }); });
+    }
+    function apvDecide(url, id, decision, seg) {
+      api(url + '/' + id, { method: 'POST', body: JSON.stringify({ decision: decision }) }).then(function (r) {
+        if (!r.ok) { alert(r.body.error || 'Failed'); return; } apvLoad(seg);
+      });
+    }
+    function apvLoad(seg) {
+      var area = document.getElementById('apvArea'); area.innerHTML = 'Loading…';
+      if (seg === 'leave') {
+        api('/api/admin/leave-requests').then(function (r) {
+          var rows = (r.body.requests || []).map(function (x) {
+            return '<tr><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.date_from) + ' → ' + esc(x.date_to) + '</td><td>' + esc(x.leave_type) +
+              '</td><td>' + esc(x.reason || '') + '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td><td>' + apvActions(x) + '</td></tr>';
+          }).join('');
+          area.innerHTML = rows ? '<div class="scroll"><table><thead><tr><th>Employee</th><th>Dates</th><th>Type</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">No leave requests.</p>';
+          apvBind(area, '/api/admin/leave-requests', 'leave');
+        });
+      } else if (seg === 'overtime') {
+        api('/api/admin/overtime-requests').then(function (r) {
+          var rows = (r.body.requests || []).map(function (x) {
+            var kind = x.ot_kind === 'before' ? 'Pre-shift' : 'After shift';
+            return '<tr><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.ot_date) + '</td><td>' + kind + '</td><td>' + esc(x.reason_label || x.reason) +
+              '<div class="muted" style="font-size:11px">' + esc(x.specific_reason || '') + '</div></td><td class="num">' + (x.ot_minutes / 60).toFixed(2) +
+              '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td><td>' + apvActions(x) + '</td></tr>';
+          }).join('');
+          area.innerHTML = rows ? '<div class="scroll"><table><thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Reason</th><th class="num">OT Hrs</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">No overtime requests.</p>';
+          apvBind(area, '/api/admin/overtime-requests', 'overtime');
+        });
+      } else {
+        api('/api/admin/loan-requests').then(function (r) {
+          var rows = (r.body.requests || []).map(function (x) {
+            return '<tr><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.loan_type_label || x.loan_type) + '</td><td class="num">' + peso(x.amount) +
+              '</td><td class="num">' + esc(x.installments) + '</td><td>' + esc(x.reason || '') + '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td><td>' + apvActions(x) + '</td></tr>';
+          }).join('');
+          area.innerHTML = '<p class="muted">You can approve <b>product advances</b> only.</p>' +
+            (rows ? '<div class="scroll"><table><thead><tr><th>Employee</th><th>Type</th><th class="num">Amount</th><th class="num">Cutoffs</th><th>Reason</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">No product-advance applications.</p>');
+          apvBind(area, '/api/admin/loan-requests', 'loans');
+        });
+      }
     }
   </script>
 </body>

@@ -42,7 +42,7 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
-  var ROLE_OPTS = [['employee', 'Employee'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
+  var ROLE_OPTS = [['employee', 'Employee'], ['supervisor', 'Supervisor'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
 
   function openAccessPanel() {
     var ov = document.createElement('div');
