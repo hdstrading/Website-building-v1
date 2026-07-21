@@ -207,6 +207,7 @@
       daysPresent: 0, daysAbsent: 0, paidLeaves: 0,
       holidayDaysUnworked: 0,   // unworked REGULAR holidays -> paid at 100%
       leaveDaysRequested: 0,    // unworked paid-leave days (gated by credits in payroll)
+      unpaidLeaveDays: 0,       // Unpaid Authorized Leave (UAL) days — tracked, never paid
       leaveDays: [],            // [{date, type}] in order, for per-type pay & credits
       regularMinutes: 0, otMinutes: 0, preOtMinutes: 0, otExcludedMinutes: 0, nightDiffMinutes: 0,
       lateMinutes: 0, undertimeMinutes: 0,
@@ -221,6 +222,7 @@
       var pay = computeDayPay(r, hourlyRate);
       r.pay = pay;
       if (r.absent) summary.daysAbsent++;
+      else if (r.leaveType === 'UAL' && r.workedMinutes === 0) { /* unpaid — counted below */ }
       else if (r.paidLeave && r.workedMinutes === 0) summary.paidLeaves++;
       else if (r.workedMinutes > 0) summary.daysPresent++;
       // Unworked-day pay rules (Labor Code):
@@ -228,7 +230,8 @@
       //  - Paid leave day => counted here, paid later if leave credits remain.
       //  - Special non-working day not worked => no work, no pay (nothing added).
       if (!r.absent && r.workedMinutes === 0) {
-        if (/regular_hol/.test(r.dayType)) { summary.holidayDaysUnworked++; r.unworkedHoliday = true; }
+        if (r.leaveType === 'UAL') { summary.unpaidLeaveDays++; r.unpaidLeave = true; }
+        else if (/regular_hol/.test(r.dayType)) { summary.holidayDaysUnworked++; r.unworkedHoliday = true; }
         else if (r.paidLeave) {
           summary.leaveDaysRequested++;
           summary.leaveDays.push({ date: r.date, type: r.leaveType || '' });
@@ -343,9 +346,10 @@
   }
   function normaliseLeave(v) {
     v = String(v || '').trim().toUpperCase();
-    if (v === 'SL' || v === 'VL' || v === 'EL') return v;
+    if (v === 'SL' || v === 'VL' || v === 'EL' || v === 'UAL') return v;
     if (/SICK/.test(v)) return 'SL';
     if (/VAC/.test(v)) return 'VL';
+    if (/UNPAID/.test(v) || /\bUAL\b/.test(v)) return 'UAL';   // Unpaid Authorized Leave
     if (/EMERG/.test(v)) return 'EL';
     return '';
   }

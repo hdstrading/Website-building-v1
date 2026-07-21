@@ -70,7 +70,7 @@
       dtr = { regularPay: basicPay, overtimePay: 0, nightDiffPay: 0,
         regularHolidayPay: 0, specialHolidayPay: 0, restDayPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
-        paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0, leaveDays: [],
+        paidLeaves: 0, holidayDaysUnworked: 0, leaveDaysRequested: 0, unpaidLeaveDays: 0, leaveDays: [],
         regularMinutes: 0, otMinutes: 0, preOtMinutes: 0, otExcludedMinutes: 0, nightDiffMinutes: 0,
         lateMinutes: 0, undertimeMinutes: 0, details: [] };
     }
@@ -126,6 +126,7 @@
       requested: dtr.leaveDaysRequested || leaveList.length || 0,
       paid: leaveDaysPaid,
       byType: paidByType,
+      unpaidAuthorized: dtr.unpaidLeaveDays || 0,   // UAL days — tracked, not paid
       creditsPerYear: emp.leaveCreditsPerYear || 0,
       remainingBefore: leaveRemaining,
       remainingAfter: leaveRemaining - leaveDaysPaid

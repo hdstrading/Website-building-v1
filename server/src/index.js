@@ -314,10 +314,37 @@ function leaveDateAllowed(dateStr, type, policy, today) {
   const manualOpen = !!(policy && policy.manualOpen);
   if (type === 'VL' && d < t0) return false;           // no backdated vacation
   const md = ymIndex(d) - ymIndex(t0);
-  if (md <= -1) return type === 'SL' || type === 'EL'; // backdated sick/emergency only
+  // Sick / emergency / unpaid-authorized are for unplannable events — may be backdated.
+  if (md <= -1) return type === 'SL' || type === 'EL' || type === 'UAL';
   if (md === 0) return true;                           // current month
   if (md === 1) return manualOpen || t0.getDate() >= openDay;
   return manualOpen;                                   // 2+ months ahead
+}
+// Inclusive whole-day count between two ISO dates (for credit accounting).
+function leaveDayCount(from, to) {
+  const a = parseDateLocal(from), b = parseDateLocal(to);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  return Math.max(1, Math.round((b - a) / 86400000) + 1);
+}
+// Remaining paid-leave credits for an employee this calendar year. Starts from the
+// 201 record (annual entitlement less what admin has marked used), then also nets out
+// credited-leave days the employee has already filed this year (pending or approved)
+// so they can't queue more pending paid leave than they hold. Unpaid Authorized Leave (UAL)
+// never touches credits.
+function leaveCreditsRemaining(emp, userId) {
+  const perYear = Number(emp && emp.leaveCreditsPerYear) || 0;
+  const usedField = Number(emp && emp.leaveCreditsUsed) || 0;
+  const year = todayLocal().getFullYear();
+  let filed = 0;
+  try {
+    const rows = db.prepare(
+      "SELECT date_from, date_to FROM leave_requests WHERE user_id = ? " +
+      "AND leave_type IN ('VL','SL','EL') AND status = 'pending' " +
+      "AND substr(date_from,1,4) = ?"
+    ).all(userId, String(year));
+    rows.forEach(function (r) { filed += leaveDayCount(r.date_from, r.date_to); });
+  } catch (e) { /* table shape guard */ }
+  return Math.max(0, perYear - usedField - filed);
 }
 
 /* ================= AUTH ================= */
@@ -820,11 +847,14 @@ app.get('/api/me/leave', A.requireAuth, (req, res) => {
   res.json({ requests: rows });
 });
 app.get('/api/me/leave-window', A.requireAuth, (req, res) => {
-  const pol = leavePolicyOf(getCompanyData());
+  const data = getCompanyData();
+  const pol = leavePolicyOf(data);
   const t = todayLocal();
+  const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
   res.json({
     openDay: Number(pol.openDay) || 21,
     manualOpen: !!pol.manualOpen,
+    creditsRemaining: emp ? leaveCreditsRemaining(emp, req.user.id) : 0,
     serverDate: t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0')
   });
 });
@@ -833,14 +863,29 @@ app.post('/api/me/leave', A.requireAuth, (req, res) => {
   const { dateFrom, dateTo, leaveType, reason } = req.body || {};
   if (!dateFrom || !dateTo) return res.status(400).json({ error: 'Start and end dates are required.' });
   if (dateTo < dateFrom) return res.status(400).json({ error: 'End date cannot be before the start date.' });
-  const type = ['SL', 'VL', 'EL'].indexOf(leaveType) >= 0 ? leaveType : 'VL';
+  const type = ['SL', 'VL', 'EL', 'UAL'].indexOf(leaveType) >= 0 ? leaveType : 'VL';
   // Enforce the leave application window for employees (admins may file anytime).
   if (['superadmin', 'admin_payroll'].indexOf(req.user.role) < 0) {
-    const pol = leavePolicyOf(getCompanyData());
+    const data = getCompanyData();
+    const pol = leavePolicyOf(data);
     if (!leaveDateAllowed(dateFrom, type, pol) || !leaveDateAllowed(dateTo, type, pol)) {
       return res.status(400).json({ error: 'Leave filing for those dates is not open yet. ' +
         (type === 'VL' ? 'Next-month leave opens on day ' + (Number(pol.openDay) || 21) + ' of the current month.' :
           'Please pick eligible dates.') });
+    }
+    // Paid leave (VL/SL/EL) requires available credits. When exhausted, the employee
+    // must use Unpaid Authorized Leave (UAL) instead, which is unpaid and needs approval.
+    if (type !== 'UAL') {
+      const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+      const remaining = emp ? leaveCreditsRemaining(emp, req.user.id) : 0;
+      const need = leaveDayCount(dateFrom, dateTo);
+      if (remaining < need) {
+        return res.status(400).json({
+          error: 'You do not have enough leave credits for this request (' + remaining +
+            ' remaining, ' + need + ' requested). Please file it as "Unpaid Authorized Leave" instead.',
+          code: 'NO_LEAVE_CREDITS', remaining: remaining
+        });
+      }
     }
   }
   db.prepare(

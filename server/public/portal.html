@@ -283,19 +283,23 @@
       var d0 = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
       if (type === 'VL' && d0 < todayObj) return false;               // no backdated vacation
       var md = ymIndex(d0.getFullYear(), d0.getMonth()) - ymIndex(todayObj.getFullYear(), todayObj.getMonth());
-      if (md <= -1) return type === 'SL' || type === 'EL';            // backdated sick/emergency only
+      if (md <= -1) return type === 'SL' || type === 'EL' || type === 'UAL'; // backdated sick/emergency/unpaid only
       if (md === 0) return true;                                       // current month
       if (md === 1) return manualOpen || todayObj.getDate() >= openDay;
       return manualOpen;                                               // 2+ months ahead
     }
     var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    var leaveState = { month: null, sel: {}, win: { openDay: 21, manualOpen: false }, today: new Date() };
+    var leaveState = { month: null, sel: {}, win: { openDay: 21, manualOpen: false }, today: new Date(), creditsRemaining: 0 };
+    // Exact wording required by HR for the Unpaid Authorized Leave acknowledgement.
+    var UAL_NOTICE = 'usage of this reason will be subject to approval,  and must ONLY be used for any events that cannot be planned or booked in advance.';
 
     function viewLeave() {
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>File a Leave Request</h2><div class="in">' +
-        '<label>Leave type</label><select id="lType" style="max-width:260px">' +
-        '<option value="VL">Vacation Leave (VL)</option><option value="SL">Sick Leave (SL)</option><option value="EL">Emergency Leave (EL)</option></select>' +
+        '<label>Leave type</label><select id="lType" style="max-width:320px">' +
+        '<option value="VL">Vacation Leave (VL)</option><option value="SL">Sick Leave (SL)</option><option value="EL">Emergency Leave (EL)</option>' +
+        '<option value="UAL">Unpaid Authorized Leave (UAL)</option></select>' +
+        '<div id="lCredits" class="legend" style="margin-top:6px"></div>' +
         '<div id="calWrap" style="margin-top:14px"></div>' +
         '<div class="legend" id="calNote"></div>' +
         '<label style="margin-top:6px">Reason</label><textarea id="lReason" rows="2" style="width:100%"></textarea>' +
@@ -306,15 +310,57 @@
       api('/api/me/leave-window').then(function (r) {
         if (r.ok && r.body) {
           leaveState.win = { openDay: r.body.openDay, manualOpen: r.body.manualOpen };
+          leaveState.creditsRemaining = Number(r.body.creditsRemaining) || 0;
           if (r.body.serverDate) { var p = r.body.serverDate.split('-'); leaveState.today = new Date(+p[0], +p[1] - 1, +p[2]); }
         }
         var t = leaveState.today;
         leaveState.month = new Date(t.getFullYear(), t.getMonth(), 1);
-        document.getElementById('lType').addEventListener('change', function () { leaveState.sel = {}; renderCal(); });
+        applyLeaveCredits();
+        document.getElementById('lType').addEventListener('change', function () {
+          leaveState.sel = {};
+          if (this.value === 'UAL') showUalNotice();
+          renderCal();
+        });
         renderCal();
       });
       document.getElementById('lSubmit').addEventListener('click', submitLeave);
       loadLeaveList();
+    }
+
+    // When paid-leave credits are exhausted, disable VL/SL/EL and steer the
+    // employee to Unpaid Authorized Leave (which is always available).
+    function applyLeaveCredits() {
+      var sel = document.getElementById('lType'), note = document.getElementById('lCredits');
+      var rem = leaveState.creditsRemaining;
+      var out = rem <= 0;
+      ['VL', 'SL', 'EL'].forEach(function (v) {
+        var opt = sel.querySelector('option[value="' + v + '"]');
+        if (opt) { opt.disabled = out; }
+      });
+      if (out && ['VL', 'SL', 'EL'].indexOf(sel.value) >= 0) {
+        sel.value = 'UAL';
+        showUalNotice();
+      }
+      note.innerHTML = out
+        ? '<b style="color:#b00020">You have no remaining paid-leave credits.</b> Paid leave (VL/SL/EL) is disabled — please file <b>Unpaid Authorized Leave</b> instead.'
+        : 'Paid-leave credits remaining this year: <b>' + rem + ' day' + (rem === 1 ? '' : 's') + '</b>.';
+    }
+
+    // Dynamic acknowledgement popup for Unpaid Authorized Leave (per HR policy).
+    function showUalNotice() {
+      if (document.getElementById('ualBackdrop')) return;
+      var back = document.createElement('div');
+      back.id = 'ualBackdrop';
+      back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+      var box = document.createElement('div');
+      box.style.cssText = 'background:#fff;max-width:440px;width:100%;border-radius:12px;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.3)';
+      box.innerHTML =
+        '<h3 style="margin:0 0 10px;color:#17408B">Unpaid Authorized Leave</h3>' +
+        '<p style="margin:0 0 18px;line-height:1.5">' + esc(UAL_NOTICE) + '</p>' +
+        '<div style="text-align:right"><button class="btn" id="ualOk">I understand</button></div>';
+      back.appendChild(box);
+      document.body.appendChild(back);
+      document.getElementById('ualOk').onclick = function () { document.body.removeChild(back); };
     }
 
     function renderCal() {
@@ -340,7 +386,7 @@
         '<button class="cal-nav" id="calNext">›</button></div>' +
         '<div class="cal">' + cells.join('') + '</div>';
       var openInfo = win.manualOpen ? 'Filing is currently open for future months.'
-        : 'Next-month leave opens on day ' + (win.openDay || 21) + ' of the current month. Sick/Emergency leave can be filed anytime.';
+        : 'Next-month leave opens on day ' + (win.openDay || 21) + ' of the current month. Sick / Emergency / Unpaid Authorized leave can be filed anytime.';
       document.getElementById('calNote').textContent = openInfo;
       var prev = document.getElementById('calPrev'), next = document.getElementById('calNext');
       if (prev) prev.onclick = function () { leaveState.month = new Date(m.getFullYear(), m.getMonth() - 1, 1); renderCal(); };

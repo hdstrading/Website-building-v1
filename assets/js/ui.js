@@ -621,7 +621,7 @@
         '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
         '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
         '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
-        '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL']], d.leaveType || '') + '</td>' +
+        '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
         '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
     }
     // Auto-populate a row for every date in the coverage when nothing exists yet.
@@ -1140,7 +1140,9 @@
       '</td><td>Contrib. Basis</td><td>' + money(r.contributions.basis) + '</td></tr>' +
       (r.leave ? '<tr><td>Status</td><td>' + esc(cap(r.employmentStatus)) +
         '</td><td>Leave Used</td><td>' + r.leave.paid +
-        '</td><td>Leave Left</td><td>' + r.leave.remainingAfter + '</td></tr>' : '') +
+        '</td><td>Leave Left</td><td>' + r.leave.remainingAfter + '</td></tr>' +
+        ((r.leave.unpaidAuthorized || 0) > 0 ? '<tr><td>Unpaid Auth. Leave</td><td>' + r.leave.unpaidAuthorized +
+          ' day' + (r.leave.unpaidAuthorized > 1 ? 's' : '') + '</td><td></td><td></td><td></td><td></td></tr>' : '') : '') +
       '</table></div>' +
       '<div class="ps-sign"><div>_____________________<br>Employee Signature</div>' +
       '<div>_____________________<br>Authorized Signatory</div></div></div>';
