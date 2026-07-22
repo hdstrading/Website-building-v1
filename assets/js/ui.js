@@ -858,22 +858,28 @@
       field('Employee', select('employeeId', empOpts, l.employeeId)) +
       field('Type', select('type', ['SSS Loan', 'Pag-IBIG Loan', 'Company Loan', 'Cash Advance', 'Product Advance', 'Other'], l.type)) +
       field('Reference / Description', '<input name="reference" value="' + esc(l.reference || '') + '" placeholder="e.g. product taken, PO no.">') +
-      field('Principal / Total Amount', '<input name="principal" type="number" step="0.01" value="' + (l.principal || '') + '">') +
+      field('Principal / Total Amount', '<input name="principal" id="loanPrincipal" type="number" step="0.01" value="' + (l.principal || '') + '" ' +
+        'oninput="var b=document.getElementById(\'loanBalance\'); if(b&&!b.dataset.touched){b.value=this.value;}">') +
       field('Monthly Amortization', '<input name="monthlyAmortization" type="number" step="0.01" value="' + (l.monthlyAmortization || '') + '">' +
         '<small class="hint">Spread across the month\'s cutoffs. Used when the per-cutoff field below is blank.</small>') +
       field('Per-cutoff deduction (advances)', '<input name="perCutoffAmount" type="number" step="0.01" value="' + (l.perCutoffAmount != null ? l.perCutoffAmount : '') + '">' +
         '<small class="hint">For cash / product advances: a fixed amount taken each cutoff until cleared (e.g. full principal = one cutoff; principal ÷ 2 = two cutoffs). Leave blank for monthly-amortized loans.</small>') +
-      field('Current Balance', '<input name="balance" type="number" step="0.01" value="' + (l.balance != null ? l.balance : l.principal || '') + '">') +
+      field('Current Balance', '<input name="balance" id="loanBalance" type="number" step="0.01" value="' + (l.balance != null ? l.balance : l.principal || '') + '" ' +
+        'oninput="this.dataset.touched=\'1\'">' +
+        '<small class="hint">The amount still owed. Leave blank to start it at the full principal / total amount above.</small>') +
       field('Start Date', '<input name="startDate" type="date" value="' + esc(l.startDate || '') + '">') +
       field('Status', select('active', [['true','Active'],['false','Closed']], String(l.active !== false))) +
       '</div>';
     modal((l.id ? 'Edit' : 'Add') + ' Loan', body, function (form) {
       var d = collect(form); d.id = l.id;
+      var balBlank = (d.balance == null || String(d.balance).trim() === '');
       d.principal = parseFloat(d.principal) || 0;
       d.monthlyAmortization = parseFloat(d.monthlyAmortization) || 0;
       var perCut = parseFloat(d.perCutoffAmount);
       if (perCut > 0) d.perCutoffAmount = perCut; else delete d.perCutoffAmount;
-      d.balance = parseFloat(d.balance) || 0;
+      // A blank balance means "start at the full principal" — otherwise the loan
+      // would save with a ₱0 balance and be silently skipped by payroll.
+      d.balance = balBlank ? d.principal : (parseFloat(d.balance) || 0);
       d.active = d.active === 'true';
       if (!d.employeeId) { alert('Employee required.'); return false; }
       S.upsert('loans', d); renderView();
