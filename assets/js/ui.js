@@ -242,6 +242,23 @@
     function txt(name, label, type) {
       return field(label, '<input name="' + name + '" type="' + (type || 'text') + '" value="' + esc(emp[name] || '') + '">');
     }
+    // Per-day (weekly) schedule table. Each row overrides the base shift for that
+    // weekday; leaving a row blank falls back to the base Work Schedule above.
+    var WD_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    function weekScheduleTable() {
+      var wsAll = emp.weekSchedule || {};
+      var rows = WD_NAMES.map(function (nm, wd) {
+        var w = wsAll[wd] || wsAll[String(wd)] || {};
+        return '<tr>' +
+          '<td>' + nm + '</td>' +
+          '<td><input name="ws_' + wd + '_in" value="' + esc(w.in || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '" style="width:90px"></td>' +
+          '<td><input name="ws_' + wd + '_out" value="' + esc(w.out || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '" style="width:90px"></td>' +
+          '<td><input name="ws_' + wd + '_brk" type="number" value="' + (w.brk != null ? w.brk : '') + '" placeholder="' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + '" style="width:64px"></td>' +
+          '<td style="text-align:center"><input name="ws_' + wd + '_off" type="checkbox"' + (w.off ? ' checked' : '') + '></td>' +
+        '</tr>';
+      }).join('');
+      return '<table class="tbl"><thead><tr><th>Day</th><th>Time In</th><th>Time Out</th><th>Break (min)</th><th>Day off</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    }
     var body =
       '<h4 class="form-section">Personal Information</h4><div class="grid2">' +
         txt('code', 'Employee Code') + txt('firstName', 'First Name') +
@@ -277,7 +294,9 @@
         field('PhilHealth', select('deductPhilHealth', [['true','Deduct'],['false','Not deducted']], String(emp.deductPhilHealth !== false))) +
         field('Pag-IBIG', select('deductPagIBIG', [['true','Deduct'],['false','Not deducted']], String(emp.deductPagIBIG !== false))) +
       '</div>' +
-      '<h4 class="form-section">Work Schedule</h4><div class="grid2">' +
+      '<h4 class="form-section">Work Schedule</h4>' +
+      '<p class="sub">This is the <b>default</b> shift used for every day. If a staff member works different hours on different days, set those below in the per-day schedule.</p>' +
+      '<div class="grid2">' +
         field('Shift Time In',
           '<input name="schedTimeIn" value="' + esc(emp.schedTimeIn || '') + '" placeholder="08:00">' +
           '<small class="hint">Used to detect tardiness. Leave blank to pay purely by hours worked.</small>') +
@@ -286,6 +305,10 @@
           '<small class="hint">Work beyond this counts as overtime (per your OT policy).</small>') +
         field('Break (minutes)', '<input name="schedBreakMins" type="number" value="' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + '">') +
       '</div>' +
+      '<h4 class="form-section">Per-day Schedule (optional)</h4>' +
+      '<p class="sub">Set different hours for specific weekdays — e.g. Monday 08:00–17:00, Tuesday 06:00–15:00. ' +
+      'Leave a row blank to use the default shift above. Tick <b>Day off</b> for a weekly rest day (work rendered then earns rest-day pay).</p>' +
+      weekScheduleTable() +
       '<h4 class="form-section">Leave Credits (Service Incentive Leave)</h4><div class="grid2">' +
         field('Leave Credits / Year',
           '<input name="leaveCreditsPerYear" type="number" step="0.5" value="' + (emp.leaveCreditsPerYear != null ? emp.leaveCreditsPerYear : (emp.employmentStatus === 'regular' ? 5 : 0)) + '">' +
@@ -319,6 +342,24 @@
       data.leaveCreditsPerYear = parseFloat(data.leaveCreditsPerYear) || 0;
       data.leaveCreditsUsed = parseFloat(data.leaveCreditsUsed) || 0;
       data.schedBreakMins = data.schedBreakMins !== '' ? (parseInt(data.schedBreakMins, 10) || 0) : 60;
+      // Reassemble the per-day (weekly) schedule from the ws_<wd>_* fields. Only
+      // keep weekdays that actually carry an override (a time set or a day off).
+      var week = {};
+      for (var wd = 0; wd < 7; wd++) {
+        var win = (data['ws_' + wd + '_in'] || '').trim();
+        var wout = (data['ws_' + wd + '_out'] || '').trim();
+        var wbrk = (data['ws_' + wd + '_brk'] || '').toString().trim();
+        var woff = data['ws_' + wd + '_off'] === true || data['ws_' + wd + '_off'] === 'true';
+        delete data['ws_' + wd + '_in']; delete data['ws_' + wd + '_out'];
+        delete data['ws_' + wd + '_brk']; delete data['ws_' + wd + '_off'];
+        var entry = {};
+        if (win) entry.in = win;
+        if (wout) entry.out = wout;
+        if (wbrk !== '') entry.brk = parseInt(wbrk, 10) || 0;
+        if (woff) entry.off = true;
+        if (Object.keys(entry).length) week[wd] = entry;
+      }
+      if (Object.keys(week).length) data.weekSchedule = week; else delete data.weekSchedule;
       data.active = data.active === 'true';
       data.deductSSS = data.deductSSS === 'true';
       data.deductPhilHealth = data.deductPhilHealth === 'true';
@@ -1851,6 +1892,7 @@
     var ot = S.db.meta.overtime || (S.db.meta.overtime = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 });
     var lp = S.db.meta.leavePolicy || (S.db.meta.leavePolicy = { manualOpen: false, openDay: 21 });
     var t13 = S.db.meta.thirteenthPolicy || (S.db.meta.thirteenthPolicy = { deductTardiness: true });
+    var nd = S.db.meta.nightDiff || (S.db.meta.nightDiff = { enabled: true });
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
@@ -1890,6 +1932,13 @@
           '<small class="hint">When on, both post-shift OT and pre-shift (early time-in) OT are paid only for dates an employee filed and an admin approved. Unauthorized OT (and early time-in) is not paid.</small>') +
         '</div>',
         '<button class="btn" id="saveOt">Save Overtime Policy</button>') +
+      card('Night Differential',
+        '<p class="muted">Philippine law adds a premium (+' + Math.round(PH.dtr.NIGHT_DIFF_RATE * 100) + '%) for hours worked between 10:00 PM and 6:00 AM. ' +
+        'Turn this off if your company does not pay night differential.</p>' +
+        field('Night differential',
+          select('ndEnabled', [['true','On — pay the night-shift premium (10 PM–6 AM)'],['false','Off — do not pay night differential']], String(nd.enabled !== false)) +
+          '<small class="hint">When off, no night-differential pay is computed for anyone. Existing finalized payrolls are unaffected.</small>'),
+        '<button class="btn" id="saveNd">Save Night Differential</button>') +
       card('Leave Application Window',
         '<p class="muted">Controls when employees can file leave from the portal. Sick and Emergency leave can always be filed (including recent past days); this window governs planned (Vacation) leave for future months.</p>' +
         '<div class="grid2">' +
@@ -1965,6 +2014,11 @@
       ot.requireAuthorization = v.querySelector('[name=otRequireAuth]').value === 'true';
       S.save();
       toast('Overtime policy saved.');
+    });
+    v.querySelector('#saveNd').addEventListener('click', function () {
+      nd.enabled = v.querySelector('[name=ndEnabled]').value === 'true';
+      S.save();
+      toast('Night differential ' + (nd.enabled ? 'enabled' : 'disabled') + '.');
     });
     v.querySelector('#saveLp').addEventListener('click', function () {
       var day = parseInt(v.querySelector('#lpOpenDay').value, 10);

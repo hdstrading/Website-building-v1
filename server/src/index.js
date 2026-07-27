@@ -264,9 +264,28 @@ function applyOtRulesSrv(otRaw, rules, lateMinutes) {
   const rounded = blocks * inc;
   return rounded < minM ? 0 : rounded;
 }
+// Effective shift for an employee on a specific date. A per-weekday entry in
+// emp.weekSchedule overrides the base shift field-by-field; blanks fall back.
+function schedForDate(emp, dateStr) {
+  emp = emp || {};
+  const base = { in: emp.schedTimeIn || '', out: emp.schedTimeOut || '',
+    brk: emp.schedBreakMins != null ? emp.schedBreakMins : 60, off: false };
+  const d = parseDateLocal(dateStr);
+  if (isNaN(d.getTime()) || !emp.weekSchedule) return base;
+  const wd = d.getDay();
+  const ws = emp.weekSchedule[wd] || emp.weekSchedule[String(wd)];
+  if (!ws) return base;
+  const has = (x) => x != null && String(x).trim() !== '';
+  return {
+    in: has(ws.in) ? ws.in : base.in,
+    out: has(ws.out) ? ws.out : base.out,
+    brk: has(ws.brk) ? (parseInt(ws.brk, 10) || 0) : base.brk,
+    off: !!ws.off
+  };
+}
 // Lateness (minutes) that day, from the employee's DTR punch for the date.
 function lateForDate(data, emp, dateStr) {
-  const schedIn = hmToMin(emp.schedTimeIn);
+  const schedIn = hmToMin(schedForDate(emp, dateStr).in);
   if (schedIn == null) return 0;
   for (const pid in (data.dtr || {})) {
     const days = (data.dtr[pid] || {})[emp.id];
@@ -285,14 +304,15 @@ function lateForDate(data, emp, dateStr) {
 //  kind 'before' — pre-shift OT,  timeVal = early time-in (before shift start)
 function computeFiledOT(data, emp, dateStr, kind, timeVal) {
   const rules = (data.meta && data.meta.overtime) || {};
+  const sched = schedForDate(emp, dateStr);
   if (kind === 'before') {
-    const schedIn = hmToMin(emp.schedTimeIn);
+    const schedIn = hmToMin(sched.in);
     const startMin = hmToMin(timeVal);
     if (schedIn == null || startMin == null) return null;
     const preRaw = Math.max(0, schedIn - startMin);
     return { otRaw: preRaw, otMinutes: applyOtRulesSrv(preRaw, rules, 0), lateMinutes: 0 };
   }
-  const schedOut = hmToMin(emp.schedTimeOut);
+  const schedOut = hmToMin(sched.out);
   const endMin = hmToMin(timeVal);
   if (schedOut == null || endMin == null) return null;
   const endN = endMin < schedOut ? endMin + 1440 : endMin; // crossed midnight
@@ -775,10 +795,11 @@ app.get('/api/me/overtime/preview', A.requireAuth, (req, res) => {
   const emp = findEmpByCode(data, req.user.employee_code);
   if (!emp) return res.json({ ok: false, error: 'No employee (201) record is linked to your account yet.' });
   const kind = req.query.kind === 'before' ? 'before' : 'after';
-  const sched = kind === 'before' ? emp.schedTimeIn : emp.schedTimeOut;
-  if (!sched) return res.json({ ok: false, error: 'Your shift ' + (kind === 'before' ? 'start' : 'end') + ' time is not set. Ask your administrator.' });
   const date = req.query.date, time = req.query.time || req.query.endTime;
   if (!date || !time) return res.json({ ok: false });
+  const daySched = schedForDate(emp, date);
+  const sched = kind === 'before' ? daySched.in : daySched.out;
+  if (!sched) return res.json({ ok: false, error: 'Your shift ' + (kind === 'before' ? 'start' : 'end') + ' time is not set for that day. Ask your administrator.' });
   const c = computeFiledOT(data, emp, date, kind, time);
   if (!c) return res.json({ ok: false, error: 'Check the time you entered.' });
   res.json({ ok: true, kind: kind, otMinutes: c.otMinutes, otHours: c.otMinutes / 60, lateMinutes: c.lateMinutes, sched: sched });
@@ -799,8 +820,9 @@ app.post('/api/me/overtime', A.requireAuth, (req, res) => {
   const data = getCompanyData();
   const emp = findEmpByCode(data, req.user.employee_code);
   if (!emp) return res.status(400).json({ error: 'No employee (201) record is linked to your account yet.' });
-  const sched = k === 'before' ? emp.schedTimeIn : emp.schedTimeOut;
-  if (!sched) return res.status(400).json({ error: 'Your work schedule (shift ' + (k === 'before' ? 'start' : 'end') + ') is not set. Ask your administrator.' });
+  const daySched = schedForDate(emp, date);
+  const sched = k === 'before' ? daySched.in : daySched.out;
+  if (!sched) return res.status(400).json({ error: 'Your work schedule (shift ' + (k === 'before' ? 'start' : 'end') + ') is not set for that day. Ask your administrator.' });
   const c = computeFiledOT(data, emp, date, k, timeVal);
   if (!c) return res.status(400).json({ error: 'Could not compute overtime — check the time you entered.' });
   db.prepare(

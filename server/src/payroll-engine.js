@@ -45,6 +45,7 @@ function overtimeForDay(companyData, emp, dtrDay) {
   const r = PH.dtr.computeDay(dtrDay, {
     defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
     schedIn: emp.schedTimeIn || null, schedOut: emp.schedTimeOut || null,
+    weekSchedule: emp.weekSchedule || null,
     ot: otPolicy, requireOtAuth: false
   });
   const pay = PH.dtr.computeDayPay(r, rates.hourly);
