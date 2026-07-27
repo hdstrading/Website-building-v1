@@ -49,6 +49,14 @@
     return h * 60 + (min || 0);
   }
 
+  // Day-of-week (0=Sun … 6=Sat) for an ISO date string, using local calendar math.
+  function weekdayOf(dateStr) {
+    var p = String(dateStr || '').split('-');
+    if (p.length < 3) return null;
+    var d = new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1);
+    return isNaN(d.getTime()) ? null : d.getDay();
+  }
+
   // Minutes worked that fall inside the night-differential window (22:00–06:00).
   function nightMinutes(start, end) {
     if (start == null || end == null) return 0;
@@ -113,9 +121,22 @@
       absent: !!day.absent, paidLeave: !!day.leavePaid, leaveType: day.leaveType || ''
     };
 
-    // Resolve effective day type (rest-day upgrades)
+    var hasVal = function (x) { return x != null && String(x).trim() !== ''; };
+    // Per-weekday recurring schedule (from the 201 record), when supplied. The
+    // matching weekday's entry sets that day's shift in/out, break and day-off
+    // status; any blank field falls back to the employee's base schedule.
+    var ws = null;
+    if (opts.weekSchedule && day.date != null) {
+      var wd = weekdayOf(day.date);
+      if (wd != null) ws = opts.weekSchedule[wd] || opts.weekSchedule[String(wd)] || null;
+    }
+
+    // Resolve effective day type (rest-day upgrades). A weekday marked "off" in
+    // the weekly schedule counts as a rest day (so work on it earns rest-day pay).
     var dt = day.dayType || 'regular';
-    if (day.restDay) {
+    var isRest = !!day.restDay || !!(ws && ws.off);
+    result.restDay = isRest;
+    if (isRest) {
       if (dt === 'regular') dt = 'rest_day';
       else if (dt === 'special') dt = 'special_rest';
       else if (dt === 'regular_holiday') dt = 'regular_hol_rest';
@@ -130,16 +151,18 @@
       // No punches but flagged paid leave / holiday-with-pay handled by payroll
       return result;
     }
-    var brk = day.breakMins != null ? day.breakMins : (opts.defaultBreak != null ? opts.defaultBreak : 60);
+    var brk = day.breakMins != null ? day.breakMins
+      : (ws && hasVal(ws.brk)) ? (parseInt(ws.brk, 10) || 0)
+      : (opts.defaultBreak != null ? opts.defaultBreak : 60);
     var span = outM - inM;
     if (span <= 0) span += 24 * 60; // crossed midnight
     var worked = Math.max(0, span - brk);
     result.workedMinutes = worked;
 
-    // Employee schedule (a per-day value overrides; blank falls back to default).
-    var hasVal = function (x) { return x != null && String(x).trim() !== ''; };
-    var schedIn = toMinutes(hasVal(day.scheduledIn) ? day.scheduledIn : opts.schedIn);
-    var schedOut = toMinutes(hasVal(day.scheduledOut) ? day.scheduledOut : opts.schedOut);
+    // Employee schedule: explicit per-DTR-row value wins, then the weekday
+    // schedule, then the employee's base default shift.
+    var schedIn = toMinutes(hasVal(day.scheduledIn) ? day.scheduledIn : (ws && hasVal(ws.in) ? ws.in : opts.schedIn));
+    var schedOut = toMinutes(hasVal(day.scheduledOut) ? day.scheduledOut : (ws && hasVal(ws.out) ? ws.out : opts.schedOut));
 
     if (schedIn != null && schedOut != null) {
       // ----- Schedule-based (identifies late / undertime / OT) -----
@@ -181,7 +204,8 @@
       if (!(auth && auth.before)) { result.otExcludedMinutes += result.preOtMinutes; result.preOtMinutes = 0; }
     }
 
-    result.nightDiffMinutes = nightMinutes(inM, outM);
+    // Night differential can be switched off company-wide in settings.
+    result.nightDiffMinutes = (opts.nightDiff === false) ? 0 : nightMinutes(inM, outM);
     return result;
   }
 
@@ -475,11 +499,32 @@
     return out;
   }
 
+  // Resolve an employee's effective shift for a given date: the weekday entry in
+  // emp.weekSchedule (if any) overrides the base schedule, field by field. Returns
+  // { in, out, brk, off } with times as "HH:MM" strings (or '' when unset).
+  function scheduleForDate(emp, dateStr) {
+    emp = emp || {};
+    var base = { in: emp.schedTimeIn || '', out: emp.schedTimeOut || '',
+      brk: emp.schedBreakMins != null ? emp.schedBreakMins : 60, off: false };
+    var wd = weekdayOf(dateStr);
+    var ws = (wd != null && emp.weekSchedule) ? (emp.weekSchedule[wd] || emp.weekSchedule[String(wd)]) : null;
+    if (!ws) return base;
+    var has = function (x) { return x != null && String(x).trim() !== ''; };
+    return {
+      in: has(ws.in) ? ws.in : base.in,
+      out: has(ws.out) ? ws.out : base.out,
+      brk: has(ws.brk) ? (parseInt(ws.brk, 10) || 0) : base.brk,
+      off: !!ws.off
+    };
+  }
+
   PH.dtr = {
     DAY_TYPES: DAY_TYPES,
     NIGHT_DIFF_RATE: NIGHT_DIFF_RATE,
     toMinutes: toMinutes,
     nightMinutes: nightMinutes,
+    weekdayOf: weekdayOf,
+    scheduleForDate: scheduleForDate,
     applyOtRules: applyOtRules,
     computeDay: computeDay,
     computeDayPay: computeDayPay,

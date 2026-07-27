@@ -52,11 +52,16 @@
     var dtr = null;
     var basicPay;
     if (ctx.dtrDays && ctx.dtrDays.length) {
-      var otPolicy = (PH.storage.db.meta && PH.storage.db.meta.overtime) || null;
+      var meta = PH.storage.db.meta || {};
+      var otPolicy = meta.overtime || null;
       dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, {
         defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
         schedIn: emp.schedTimeIn || null,
         schedOut: emp.schedTimeOut || null,
+        // Per-weekday recurring schedule (overrides the base shift for that day).
+        weekSchedule: emp.weekSchedule || null,
+        // Night differential is on unless switched off company-wide in settings.
+        nightDiff: !(meta.nightDiff && meta.nightDiff.enabled === false),
         ot: otPolicy,
         // Overtime is paid only when authorized, if the company requires it.
         requireOtAuth: !!(otPolicy && otPolicy.requireAuthorization),
