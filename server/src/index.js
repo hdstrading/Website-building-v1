@@ -746,6 +746,77 @@ app.post('/api/integrations/product-advance', integrationAuth, (req, res) => {
   res.json({ ok: true, loanId: loanId, employeeId: emp.id, perCutoffAmount: perCutoff, cutoffs: cuts, companyVersion: version });
 });
 
+// Inventory → payroll: credit back a product advance when goods are physically
+// returned (a confirmed sales return). Identified by the ORIGINAL order/invoice
+// ref used when it was posted. Any not-yet-deducted amount is cancelled from the
+// outstanding balance; any portion already withheld in a finalized cutoff is
+// refunded as a (non-taxable) adjustment on the next open payslip. Idempotent on
+// returnRef so the same return never credits twice.
+app.post('/api/integrations/product-advance/reverse', integrationAuth, (req, res) => {
+  const { orderRef, amount, returnRef, reason } = req.body || {};
+  if (!orderRef) return res.status(400).json({ error: 'orderRef (the original order/invoice reference) is required.' });
+  const amt = round2(amount);
+  if (!(amt > 0)) return res.status(400).json({ error: 'A positive amount is required.' });
+
+  const data = getCompanyData();
+  data.loans = data.loans || [];
+  const loan = data.loans.find(function (l) { return l.source === 'inventory' && l.sourceOrderRef === String(orderRef); });
+  if (!loan) return res.status(404).json({ error: 'No product advance was found for order ' + orderRef + '.', code: 'ADVANCE_NOT_FOUND' });
+
+  loan.reversals = loan.reversals || [];
+  if (returnRef != null && String(returnRef).trim() !== '' &&
+      loan.reversals.some(function (r) { return r.returnRef === String(returnRef); })) {
+    return res.json({ ok: true, duplicate: true, loanId: loan.id });
+  }
+
+  const alreadyReversed = loan.reversals.reduce(function (s, r) { return s + (Number(r.amount) || 0); }, 0);
+  const maxReversible = round2((loan.principal || 0) - alreadyReversed);
+  const credit = round2(Math.min(amt, Math.max(0, maxReversible)));
+
+  const emp = (data.employees || []).find(function (e) { return e.id === loan.employeeId; });
+  // Cancel not-yet-deducted amount from the balance; refund whatever was already withheld.
+  const balanceReduce = round2(Math.min(credit, loan.balance || 0));
+  loan.balance = round2((loan.balance || 0) - balanceReduce);
+  const refund = round2(credit - balanceReduce);
+  if (loan.balance <= 0) loan.active = false;
+  loan.reversals.push({ returnRef: (returnRef != null ? String(returnRef) : null), amount: credit, reason: reason || '', at: new Date().toISOString() });
+
+  // Refund the already-deducted portion on the earliest open (non-finalized) period.
+  let refundPeriod = null;
+  if (refund > 0 && emp) {
+    const open = (data.periods || [])
+      .filter(function (p) { return p.status !== 'finalized'; })
+      .sort(function (a, b) { return a.startDate < b.startDate ? -1 : 1; })[0] || null;
+    if (open) {
+      data.adjustments = data.adjustments || {};
+      data.adjustments[open.id] = data.adjustments[open.id] || {};
+      const arr = data.adjustments[open.id][emp.id] = data.adjustments[open.id][emp.id] || [];
+      arr.push({ name: 'Product advance refund' + (returnRef ? ' (return ' + returnRef + ')' : ''),
+        amount: refund, taxable: false, type: 'refund', reversalOf: String(orderRef) });
+      refundPeriod = open;
+    }
+  }
+
+  let version;
+  try { version = saveCompanyData(data); }
+  catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+
+  const empLabel = emp ? emp.code : ('loan ' + loan.id);
+  audit({ user: { id: null, email: 'inventory-integration', role: 'system' } }, 'update', 'loan',
+    'Reversed ₱' + credit + ' of product advance for ' + empLabel + ' (order ' + orderRef +
+    (returnRef ? ', return ' + returnRef : '') + ') — ₱' + balanceReduce + ' cancelled from balance' +
+    (refund > 0 ? (', ₱' + refund + ' refunded' + (refundPeriod ? ' on ' + refundPeriod.name : ' (no open period — pending)')) : ''));
+  if (emp) {
+    const linked = db.prepare('SELECT id FROM users WHERE employee_code = ?').get(emp.code);
+    if (linked) notify(linked.id, 'loan', 'Product advance reversed',
+      'A returned purchase credited back ₱' + credit.toLocaleString('en-PH') + '.' +
+      (refund > 0 && refundPeriod ? ' ₱' + refund.toLocaleString('en-PH') + ' already deducted will be refunded on ' + refundPeriod.name + '.' : ''));
+  }
+  res.json({ ok: true, loanId: loan.id, credited: credit, balanceReduced: balanceReduce,
+    refunded: refund, refundPeriod: refundPeriod ? refundPeriod.name : null,
+    remainingBalance: loan.balance, companyVersion: version });
+});
+
 // Admin resets a user's password (provide one, or a random one is generated).
 app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
