@@ -51,7 +51,21 @@
         <label>Email</label><input name="email" type="email" autocomplete="username" required>
         <label>Password</label><input name="password" type="password" autocomplete="current-password" required>
         <button class="btn" type="submit">Sign In</button>
-        <div style="text-align:center;margin-top:12px"><a href="#" id="forgotLink" style="color:#17408b;font-size:13px;text-decoration:none">Forgot password?</a></div>
+        <div style="text-align:center;margin-top:12px">
+          <a href="#" id="forgotLink" style="color:#17408b;font-size:13px;text-decoration:none">Forgot password?</a>
+          <span style="color:#bbb"> &nbsp;·&nbsp; </span>
+          <a href="#" id="reset2faLink" style="color:#17408b;font-size:13px;text-decoration:none">Reset with authenticator app</a>
+        </div>
+      </form>
+
+      <form id="reset2faForm" style="display:none">
+        <div class="section-title">Reset password with your authenticator</div>
+        <p style="font-size:13px;color:#555;margin:0 0 10px">Use this if you set up an authenticator app (Google Authenticator, Authy, etc.). Enter the 6-digit code it shows for “HDS Trading Payroll”.</p>
+        <label>Email</label><input name="email" type="email" autocomplete="username" required>
+        <label>6-digit code</label><input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" required>
+        <label>New password</label><input name="password" type="password" minlength="6" autocomplete="new-password" required>
+        <button class="btn" type="submit">Set New Password</button>
+        <div style="text-align:center;margin-top:12px"><a href="#" id="backToLogin" style="color:#17408b;font-size:13px;text-decoration:none">← Back to sign in</a></div>
       </form>
 
       <form id="registerForm" style="display:none">
@@ -135,6 +149,36 @@
         .then(function (r) { return r.json(); })
         .then(function (j) { showMsg(j.message || 'If that email is registered, a reset link has been sent.', true); })
         .catch(function () { showMsg('Network error.'); });
+    });
+
+    // Toggle the authenticator-reset form.
+    function showReset2fa(show) {
+      document.getElementById('loginForm').style.display = show ? 'none' : '';
+      document.getElementById('registerForm').style.display = 'none';
+      document.getElementById('reset2faForm').style.display = show ? '' : 'none';
+      document.querySelector('.tabs').style.display = show ? 'none' : '';
+      clearMsg();
+      if (show) {
+        var e = document.querySelector('#loginForm [name=email]').value;
+        if (e) document.querySelector('#reset2faForm [name=email]').value = e;
+      }
+    }
+    document.getElementById('reset2faLink').addEventListener('click', function (e) { e.preventDefault(); showReset2fa(true); });
+    document.getElementById('backToLogin').addEventListener('click', function (e) { e.preventDefault(); showReset2fa(false); });
+
+    document.getElementById('reset2faForm').addEventListener('submit', function (e) {
+      e.preventDefault(); clearMsg();
+      var d = collect(e.target);
+      var btn = e.target.querySelector('button'); btn.disabled = true;
+      fetch('/api/auth/reset-2fa', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: d.email, code: (d.code || '').replace(/\s+/g, ''), password: d.password }) })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.ok) return showMsg(res.j.error || 'Could not reset password.');
+          showReset2fa(false);
+          showMsg('Password updated. You can now sign in with your new password.', true);
+        }).catch(function () { btn.disabled = false; showMsg('Network error.'); });
     });
 
     document.getElementById('loginForm').addEventListener('submit', function (e) {

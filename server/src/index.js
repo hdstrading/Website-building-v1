@@ -9,6 +9,7 @@ const { db, emptyCompanyData } = require('./db');
 const A = require('./auth');
 const mailer = require('./mailer');
 const engine = require('./payroll-engine');
+const totp = require('./totp');
 
 const app = express();
 app.set('trust proxy', true); // behind Caddy/Nginx: honour X-Forwarded-Proto
@@ -427,6 +428,57 @@ app.post('/api/auth/reset', (req, res) => {
   if (!uid) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
   if (!password || String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(password), uid);
+  res.json({ ok: true });
+});
+
+// Self-service password reset using the authenticator app (no email needed).
+// Requires the user to have enabled 2FA beforehand. A single generic error is
+// returned for a bad email or code so the endpoint can't be used to probe accounts.
+app.post('/api/auth/reset-2fa', (req, res) => {
+  const email = String((req.body && req.body.email) || '').toLowerCase();
+  const { code, password } = req.body || {};
+  if (!password || String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  const bad = function () { return res.status(400).json({ error: 'Invalid email or authentication code.' }); };
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (!user || user.status === 'disabled' || !user.totp_enabled || !user.totp_secret) return bad();
+  if (!totp.verifyToken(code, user.totp_secret)) return bad();
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(password), user.id);
+  audit({ user: { id: user.id, email: user.email, role: user.role } }, 'update', 'user', 'Password reset via authenticator (2FA)');
+  res.json({ ok: true });
+});
+
+// Whether the signed-in user has the authenticator app enabled.
+app.get('/api/me/2fa/status', A.requireAuth, (req, res) => {
+  res.json({ enabled: !!req.user.totp_enabled });
+});
+
+// Begin enrolment: generate (or regenerate) a pending secret and return the
+// setup key + otpauth URI. Not active until confirmed with a valid code.
+app.post('/api/me/2fa/setup', A.requireAuth, (req, res) => {
+  const secret = totp.generateSecret();
+  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?').run(secret, req.user.id);
+  res.json({ secret: secret, otpauthUrl: totp.otpauthURL(secret, req.user.email, 'HDS Trading Payroll') });
+});
+
+// Confirm enrolment: verify a code against the pending secret and switch 2FA on.
+app.post('/api/me/2fa/verify', A.requireAuth, (req, res) => {
+  const code = (req.body && req.body.code) || '';
+  const row = db.prepare('SELECT totp_secret FROM users WHERE id = ?').get(req.user.id);
+  if (!row || !row.totp_secret) return res.status(400).json({ error: 'Start the setup first.' });
+  if (!totp.verifyToken(code, row.totp_secret)) return res.status(400).json({ error: 'That code is incorrect. Check your authenticator app and try again.' });
+  db.prepare('UPDATE users SET totp_enabled = 1 WHERE id = ?').run(req.user.id);
+  audit(req, 'update', 'user', 'Enabled authenticator (2FA)');
+  res.json({ ok: true });
+});
+
+// Turn 2FA off (requires a current code to confirm it's really the owner).
+app.post('/api/me/2fa/disable', A.requireAuth, (req, res) => {
+  const code = (req.body && req.body.code) || '';
+  if (req.user.totp_enabled && !totp.verifyToken(code, req.user.totp_secret)) {
+    return res.status(400).json({ error: 'Enter a current code from your authenticator to turn 2FA off.' });
+  }
+  db.prepare('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?').run(req.user.id);
+  audit(req, 'update', 'user', 'Disabled authenticator (2FA)');
   res.json({ ok: true });
 });
 
