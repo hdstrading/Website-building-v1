@@ -99,6 +99,7 @@
     <a href="#" data-tab="overtime">Overtime</a>
     <a href="#" data-tab="loans">Loans</a>
     <a href="#" data-tab="payslips">My Payslips</a>
+    <a href="#" data-tab="security">Security</a>
   </nav>
   <main id="view"></main>
 
@@ -178,7 +179,7 @@
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
       ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, overtime: viewOvertime, loans: viewLoans,
-         payslips: viewPayslips, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
+         payslips: viewPayslips, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
     // ---- bootstrap ----
@@ -204,6 +205,61 @@
         setInterval(pollNotifs, 45000);
       });
     });
+
+    // ---- Security: authenticator-app (2FA) for password reset ----
+    function viewSecurity() {
+      var v = document.getElementById('view');
+      v.innerHTML = '<div class="card"><h2>Security</h2><div class="in" id="secBody">Loading…</div></div>';
+      api('/api/me/2fa/status').then(function (r) { renderSecurity(!!(r.body && r.body.enabled)); });
+    }
+    function renderSecurity(enabled) {
+      var b = document.getElementById('secBody');
+      b.innerHTML =
+        '<p class="muted">Set up an <b>authenticator app</b> (Google Authenticator, Microsoft Authenticator, Authy…). ' +
+        'Once enabled, you can reset your own password from the sign-in screen using the 6-digit code — no email needed.</p>' +
+        '<p>Authenticator status: <b style="color:' + (enabled ? '#0a7d33' : '#b00020') + '">' + (enabled ? 'Enabled' : 'Not set up') + '</b></p>' +
+        (enabled
+          ? '<label>Enter a current 6-digit code to turn it off</label>' +
+            '<input id="secCode" inputmode="numeric" maxlength="6" placeholder="123456" style="max-width:180px">' +
+            '<button class="btn" id="secDisable" style="margin-top:8px;background:#b00020">Turn Off Authenticator</button>'
+          : '<button class="btn" id="secSetup">Set Up Authenticator</button>') +
+        '<div id="secMsg" class="msg"></div><div id="secSetupArea" style="margin-top:12px"></div>';
+      if (enabled) {
+        document.getElementById('secDisable').addEventListener('click', function () {
+          var code = (document.getElementById('secCode').value || '').replace(/\s+/g, '');
+          api('/api/me/2fa/disable', { method: 'POST', body: JSON.stringify({ code: code }) }).then(function (r) {
+            var m = document.getElementById('secMsg');
+            if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Could not turn off.'); m.className = 'msg err'; return; }
+            renderSecurity(false);
+          });
+        });
+      } else {
+        document.getElementById('secSetup').addEventListener('click', beginSecuritySetup);
+      }
+    }
+    function beginSecuritySetup() {
+      api('/api/me/2fa/setup', { method: 'POST', body: '{}' }).then(function (r) {
+        if (!r.ok) return;
+        var s = r.body.secret, uri = r.body.otpauthUrl;
+        document.getElementById('secSetupArea').innerHTML =
+          '<div class="card" style="background:#f8fafc"><div class="in">' +
+          '<p><b>1.</b> In your authenticator app, add an account and enter this setup key:</p>' +
+          '<p style="font-family:monospace;font-size:18px;letter-spacing:2px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;word-break:break-all">' + esc(s) + '</p>' +
+          '<p style="font-size:13px"><a href="' + esc(uri) + '">Tap here to add it automatically</a> (works if an authenticator app is installed on this device).</p>' +
+          '<p><b>2.</b> Enter the 6-digit code it shows to confirm:</p>' +
+          '<input id="secVerify" inputmode="numeric" maxlength="6" placeholder="123456" style="max-width:180px">' +
+          '<button class="btn" id="secConfirm" style="margin-top:8px">Confirm &amp; Enable</button>' +
+          '<div id="secVerifyMsg" class="msg"></div></div></div>';
+        document.getElementById('secConfirm').addEventListener('click', function () {
+          var code = (document.getElementById('secVerify').value || '').replace(/\s+/g, '');
+          api('/api/me/2fa/verify', { method: 'POST', body: JSON.stringify({ code: code }) }).then(function (r2) {
+            var m = document.getElementById('secVerifyMsg');
+            if (!r2.ok) { m.textContent = '  ' + (r2.body.error || 'Incorrect code.'); m.className = 'msg err'; return; }
+            renderSecurity(true);
+          });
+        });
+      });
+    }
 
     // ---- My 201 ----
     function viewProfile() {

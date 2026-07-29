@@ -120,6 +120,10 @@ CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);
 // Migrate older overtime_requests created before ot_kind existed.
 try { db.exec("ALTER TABLE overtime_requests ADD COLUMN ot_kind TEXT NOT NULL DEFAULT 'after'"); } catch (e) { /* column already present */ }
 
+// Authenticator-app (TOTP) 2FA, used for self-service password reset.
+try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
+
 // Seed the single company row with an empty data document if missing.
 function emptyCompanyData() {
   return {
