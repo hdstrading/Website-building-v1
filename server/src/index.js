@@ -674,6 +674,78 @@ app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
   res.json({ ok: true, loanId: loanId, companyVersion: version });
 });
 
+/* ================= EXTERNAL INTEGRATIONS =================
+ * Machine-to-machine endpoints for sibling apps (e.g. the inventory system).
+ * Authenticated with a shared secret (INTEGRATION_API_KEY) rather than a user
+ * login, and matched to payroll by the employee CODE (never by name).
+ */
+function integrationAuth(req, res, next) {
+  const key = process.env.INTEGRATION_API_KEY;
+  if (!key) return res.status(503).json({ error: 'Integration is not enabled on the payroll server (INTEGRATION_API_KEY is not set).' });
+  const provided = req.get('X-Integration-Key') || (req.body && req.body.apiKey) || '';
+  // Length-guarded compare; both sides are short shared secrets.
+  if (!provided || provided.length !== key.length || provided !== key) {
+    return res.status(401).json({ error: 'Invalid integration key.' });
+  }
+  next();
+}
+
+// Look up active employees (code + name) so the inventory app can pick/validate
+// a payroll employee code. Read-only.
+app.get('/api/integrations/employees', integrationAuth, (req, res) => {
+  const data = getCompanyData();
+  const q = String(req.query.code || '').trim();
+  let list = (data.employees || []).filter(function (e) { return e.active !== false; });
+  if (q) list = list.filter(function (e) { return e.code === q; });
+  res.json({ employees: list.map(function (e) {
+    return { code: e.code, name: (e.lastName || '') + ', ' + (e.firstName || ''), id: e.id };
+  }) });
+});
+
+// Inventory → payroll: record a staff sales order as a Product Advance. Applied
+// directly (no approval step), deducted over 1–2 cutoffs within the month.
+// Idempotent on orderRef so re-sends don't double-charge.
+app.post('/api/integrations/product-advance', integrationAuth, (req, res) => {
+  const { employeeCode, amount, reference, orderRef, cutoffs } = req.body || {};
+  if (!employeeCode) return res.status(400).json({ error: 'employeeCode is required.' });
+  const amt = round2(amount);
+  if (!(amt > 0)) return res.status(400).json({ error: 'A positive amount is required.' });
+
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, String(employeeCode).trim());
+  if (!emp) return res.status(404).json({ error: 'No employee with code "' + employeeCode + '" exists in payroll.', code: 'EMPLOYEE_NOT_FOUND' });
+
+  data.loans = data.loans || [];
+  // Idempotency: the same inventory order already posted → return the existing one.
+  if (orderRef != null && String(orderRef).trim() !== '') {
+    const dup = data.loans.find(function (l) { return l.source === 'inventory' && l.sourceOrderRef === String(orderRef); });
+    if (dup) return res.json({ ok: true, duplicate: true, loanId: dup.id, employeeId: emp.id });
+  }
+
+  const cuts = Math.min(2, Math.max(1, parseInt(cutoffs, 10) || 1));
+  const perCutoff = round2(amt / cuts);
+  const loanId = 'loan_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const loan = {
+    id: loanId, employeeId: emp.id, loanType: 'product_advance', type: 'Product Advance',
+    principal: amt, balance: amt, active: true,
+    perCutoffAmount: perCutoff, monthlyAmortization: amt, installmentsPlanned: cuts,
+    reference: reference ? String(reference).slice(0, 200) : ('Inventory order ' + (orderRef || '')),
+    source: 'inventory', sourceOrderRef: (orderRef != null ? String(orderRef) : null)
+  };
+  data.loans.push(loan);
+  let version;
+  try { version = saveCompanyData(data); }
+  catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+
+  const deductDesc = '₱' + perCutoff.toLocaleString('en-PH') + ' per cutoff over ' + cuts + ' cutoff' + (cuts > 1 ? 's' : '');
+  audit({ user: { id: null, email: 'inventory-integration', role: 'system' } }, 'create', 'loan',
+    'Product Advance ₱' + amt + ' for ' + emp.code + ' from inventory order ' + (orderRef || '(none)') + ' — ' + deductDesc);
+  const linked = db.prepare('SELECT id FROM users WHERE employee_code = ?').get(emp.code);
+  if (linked) notify(linked.id, 'loan', 'Product advance recorded',
+    'A product advance of ₱' + amt.toLocaleString('en-PH') + ' (' + (reference || ('order ' + orderRef)) + ') was added and will be deducted ' + deductDesc + '.');
+  res.json({ ok: true, loanId: loanId, employeeId: emp.id, perCutoffAmount: perCutoff, cutoffs: cuts, companyVersion: version });
+});
+
 // Admin resets a user's password (provide one, or a random one is generated).
 app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
