@@ -67,7 +67,7 @@ function publicUser(u) {
   if (!u) return null;
   return {
     id: u.id, email: u.email, fullName: u.full_name, role: u.role,
-    status: u.status, employeeCode: u.employee_code
+    status: u.status, employeeCode: u.employee_code, locationId: u.location_id || null
   };
 }
 

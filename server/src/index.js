@@ -44,6 +44,99 @@ function saveCompanyData(data, expectedVersion) {
 function findEmpByCode(data, code) {
   return (data.employees || []).find(function (e) { return e.code === code; });
 }
+
+/* ---------- location scoping (per-location manager accounts) ----------
+ * A user with a location_id sees and edits ONLY that location's slice of the
+ * company document. Periods, settings (meta) and statutory tables are shared and
+ * stay read-only for scoped users. Superadmins and unscoped admins see everything.
+ */
+function scopedEmpIdSet(data, locationId) {
+  const ids = {};
+  (data.employees || []).forEach(function (e) { if (e && e.locationId === locationId) ids[e.id] = true; });
+  return ids;
+}
+// A read view of the company data limited to one location.
+function scopeCompanyData(data, locationId) {
+  const inLoc = scopedEmpIdSet(data, locationId);
+  function filterMap(map) {
+    const out = {};
+    Object.keys(map || {}).forEach(function (pid) {
+      const per = map[pid] || {}, kept = {};
+      Object.keys(per).forEach(function (empId) { if (inLoc[empId]) kept[empId] = per[empId]; });
+      out[pid] = kept;
+    });
+    return out;
+  }
+  const otA = {};
+  Object.keys(data.otApprovals || {}).forEach(function (empId) { if (inLoc[empId]) otA[empId] = data.otApprovals[empId]; });
+  return Object.assign({}, data, {
+    employees: (data.employees || []).filter(function (e) { return inLoc[e.id]; }),
+    allowances: (data.allowances || []).filter(function (a) { return inLoc[a.employeeId]; }),
+    loans: (data.loans || []).filter(function (l) { return inLoc[l.employeeId]; }),
+    dtr: filterMap(data.dtr),
+    adjustments: filterMap(data.adjustments),
+    payrolls: filterMap(data.payrolls),
+    otApprovals: otA
+  });
+}
+// Merge a scoped user's submitted (single-location) document back into the full
+// stored document, so a scoped save only ever touches THEIR location. Periods,
+// payrolls, settings and statutory config are never changed by a scoped user.
+function mergeScopedCompanyData(stored, submitted, locationId) {
+  const merged = JSON.parse(JSON.stringify(stored));
+  // Force submitted employees to stay in this location (can't be moved out).
+  const submittedEmps = (submitted.employees || []).map(function (e) { return Object.assign({}, e, { locationId: locationId }); });
+  // Scope = employees that were in this location OR are in the submitted set.
+  const scope = {};
+  (stored.employees || []).forEach(function (e) { if (e.locationId === locationId) scope[e.id] = true; });
+  submittedEmps.forEach(function (e) { if (e.id) scope[e.id] = true; });
+
+  merged.employees = (stored.employees || []).filter(function (e) { return e.locationId !== locationId; }).concat(submittedEmps);
+  function mergeByEmp(storedArr, submittedArr) {
+    return (storedArr || []).filter(function (x) { return !scope[x.employeeId]; })
+      .concat((submittedArr || []).filter(function (x) { return scope[x.employeeId]; }));
+  }
+  merged.allowances = mergeByEmp(stored.allowances, submitted.allowances);
+  merged.loans = mergeByEmp(stored.loans, submitted.loans);
+  function mergeMap(storedMap, submittedMap) {
+    const out = {}, pids = {};
+    Object.keys(storedMap || {}).forEach(function (p) { pids[p] = true; });
+    Object.keys(submittedMap || {}).forEach(function (p) { pids[p] = true; });
+    Object.keys(pids).forEach(function (pid) {
+      const s = (storedMap && storedMap[pid]) || {}, b = (submittedMap && submittedMap[pid]) || {}, per = {};
+      Object.keys(s).forEach(function (empId) { if (!scope[empId]) per[empId] = s[empId]; });
+      Object.keys(b).forEach(function (empId) { if (scope[empId]) per[empId] = b[empId]; });
+      out[pid] = per;
+    });
+    return out;
+  }
+  merged.dtr = mergeMap(stored.dtr, submitted.dtr);
+  merged.adjustments = mergeMap(stored.adjustments, submitted.adjustments);
+  const otA = {};
+  Object.keys(stored.otApprovals || {}).forEach(function (empId) { if (!scope[empId]) otA[empId] = stored.otApprovals[empId]; });
+  Object.keys(submitted.otApprovals || {}).forEach(function (empId) { if (scope[empId]) otA[empId] = submitted.otApprovals[empId]; });
+  merged.otApprovals = otA;
+  // Shared / central-only — never altered by a scoped save.
+  merged.periods = stored.periods;
+  merged.payrolls = stored.payrolls;
+  merged.thirteenthMonth = stored.thirteenthMonth;
+  merged.meta = stored.meta;
+  merged.statutoryConfig = stored.statutoryConfig;
+  return merged;
+}
+function locationNameOf(data, locationId) {
+  const l = ((data.meta && data.meta.locations) || []).find(function (x) { return x.id === locationId; });
+  return l ? l.name : '';
+}
+// For a location-scoped reviewer, keep only request rows whose employee_code
+// belongs to their location. Unscoped reviewers (central) see everything.
+function scopeRequestRows(req, rows) {
+  const loc = req.user && req.user.location_id;
+  if (!loc) return rows;
+  const data = getCompanyData(); const byCode = {};
+  (data.employees || []).forEach(function (e) { if (e.code) byCode[e.code] = e.locationId || null; });
+  return rows.filter(function (r) { return byCode[r.employee_code] === loc; });
+}
 // Record an in-app notification for a user (best-effort; never throws to caller).
 function notify(userId, type, title, body) {
   if (!userId) return;
@@ -486,18 +579,25 @@ app.post('/api/me/2fa/disable', A.requireAuth, (req, res) => {
 // Auditors (3rd-party, read-only) may load company data to view reports only.
 app.get('/api/company', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor'), (req, res) => {
   const row = getCompany();
-  res.json({ name: row.name, version: row.data_version, data: JSON.parse(row.data_json), role: req.user.role });
+  const full = JSON.parse(row.data_json);
+  const loc = req.user.location_id || null;
+  const out = { name: row.name, version: row.data_version, data: loc ? scopeCompanyData(full, loc) : full, role: req.user.role };
+  if (loc) out.scope = { locationId: loc, locationName: locationNameOf(full, loc) };
+  res.json(out);
 });
-// Only superadmin & payroll admins may write the full company data.
+// Only superadmin & payroll admins may write the full company data. A user scoped
+// to a location has their submission merged so it only ever touches THEIR branch.
 app.put('/api/company', A.requireRole('superadmin', 'admin_payroll'), (req, res) => {
   const { data, version } = req.body || {};
   if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Missing data.' });
   const before = getCompanyData(); // capture prior state for the audit diff
+  const loc = req.user.location_id || null;
   try {
-    const v = saveCompanyData(data, version);
+    const toSave = loc ? mergeScopedCompanyData(before, data, loc) : data;
+    const v = saveCompanyData(toSave, version);
     // Log each meaningful change (who/what/when) for the superadmin history.
-    const changes = diffCompanyData(before, data).slice(0, 60);
-    changes.forEach(function (c) { audit(req, c.action, c.entity, c.detail); });
+    const changes = diffCompanyData(before, toSave).slice(0, 60);
+    changes.forEach(function (c) { audit(req, c.action, c.entity, c.detail + (loc ? ' [' + locationNameOf(before, loc) + ']' : '')); });
     res.json({ ok: true, version: v });
   } catch (e) {
     if (e.code === 'CONFLICT') return res.status(409).json({ error: e.message });
@@ -511,8 +611,13 @@ const adminMgmt = A.requireRole('superadmin', 'admin_payroll');
 // and view employees' DTR — but not touch payroll, users or company settings.
 const canReview = A.requireRole('superadmin', 'admin_payroll', 'finance', 'supervisor');
 const canDecide = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
+// Managing user accounts is a central function — a location-scoped admin cannot.
+function requireUnscoped(req, res, next) {
+  if (req.user && req.user.location_id) return res.status(403).json({ error: 'Location managers cannot manage user accounts. Ask a central administrator.' });
+  next();
+}
 
-app.get('/api/admin/users', adminMgmt, (req, res) => {
+app.get('/api/admin/users', adminMgmt, requireUnscoped, (req, res) => {
   const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
   res.json({ users: users.map(function (u) {
     return Object.assign(A.publicUser(u), { profile: JSON.parse(u.profile_json || '{}'), createdAt: u.created_at });
@@ -520,8 +625,8 @@ app.get('/api/admin/users', adminMgmt, (req, res) => {
 });
 
 // Approve / activate a user, set role, and link (or create) their employee record.
-app.post('/api/admin/users/:id/approve', adminMgmt, (req, res) => {
-  const { role, employeeCode, createEmployee } = req.body || {};
+app.post('/api/admin/users/:id/approve', adminMgmt, requireUnscoped, (req, res) => {
+  const { role, employeeCode, createEmployee, locationId } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   const newRole = A.ROLES.indexOf(role) >= 0 ? role : 'employee';
@@ -539,18 +644,34 @@ app.post('/api/admin/users/:id/approve', adminMgmt, (req, res) => {
         code: code, employmentType: 'monthly', dailyRateFactor: 313, workDaysPerWeek: 6, restDay: 0,
         employmentStatus: 'probationary', leaveCreditsPerYear: 0, leaveCreditsUsed: 0,
         schedTimeIn: '08:00', schedTimeOut: '17:00', schedBreakMins: 60,
-        contributionBasis: 'basic', active: true
+        contributionBasis: 'basic', active: true,
+        locationId: locationId || null
       }, sanitizeProfile(profile), { code: code }));
       saveCompanyData(data);
     }
   }
-  db.prepare('UPDATE users SET status = \'active\', role = ?, employee_code = ? WHERE id = ?')
-    .run(newRole, code, user.id);
-  audit(req, 'update', 'user', 'Approved ' + user.email + ' as ' + newRole + (code ? ' (' + code + ')' : ''));
+  // Superadmins are never location-scoped; everyone else may be tied to a branch.
+  const loc = (newRole === 'superadmin') ? null : (locationId || null);
+  db.prepare('UPDATE users SET status = \'active\', role = ?, employee_code = ?, location_id = ? WHERE id = ?')
+    .run(newRole, code, loc, user.id);
+  audit(req, 'update', 'user', 'Approved ' + user.email + ' as ' + newRole + (code ? ' (' + code + ')' : '') + (loc ? ' @ ' + locationNameOf(getCompanyData(), loc) : ''));
   res.json({ ok: true });
 });
 
-app.post('/api/admin/users/:id/role', adminMgmt, (req, res) => {
+// Set (or clear) a user's location scope. Superadmins cannot be scoped.
+app.post('/api/admin/users/:id/location', adminMgmt, requireUnscoped, (req, res) => {
+  const { locationId } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  if (user.role === 'superadmin' && locationId) return res.status(400).json({ error: 'A Super Admin cannot be limited to a single location.' });
+  const loc = locationId || null;
+  if (loc && !locationNameOf(getCompanyData(), loc)) return res.status(400).json({ error: 'Unknown location.' });
+  db.prepare('UPDATE users SET location_id = ? WHERE id = ?').run(loc, user.id);
+  audit(req, 'update', 'user', 'Set ' + user.email + ' location to ' + (loc ? locationNameOf(getCompanyData(), loc) : 'All locations'));
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/role', adminMgmt, requireUnscoped, (req, res) => {
   const { role } = req.body || {};
   if (A.ROLES.indexOf(role) < 0) return res.status(400).json({ error: 'Invalid role.' });
   // Guard: never leave the system without a superadmin.
@@ -559,12 +680,14 @@ app.post('/api/admin/users/:id/role', adminMgmt, (req, res) => {
     const supers = db.prepare('SELECT COUNT(*) c FROM users WHERE role = \'superadmin\' AND status = \'active\'').get().c;
     if (supers <= 1) return res.status(400).json({ error: 'There must be at least one Super Admin.' });
   }
-  db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
+  // Promoting to Super Admin clears any location scope (superadmins see all).
+  if (role === 'superadmin') db.prepare('UPDATE users SET role = ?, location_id = NULL WHERE id = ?').run(role, req.params.id);
+  else db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, req.params.id);
   audit(req, 'update', 'user', 'Role of ' + (target ? target.email : req.params.id) + ' → ' + role);
   res.json({ ok: true });
 });
 
-app.post('/api/admin/users/:id/status', adminMgmt, (req, res) => {
+app.post('/api/admin/users/:id/status', adminMgmt, requireUnscoped, (req, res) => {
   const { status } = req.body || {};
   if (['active', 'disabled', 'pending'].indexOf(status) < 0) return res.status(400).json({ error: 'Invalid status.' });
   const tgt = db.prepare('SELECT email FROM users WHERE id = ?').get(req.params.id);
@@ -578,7 +701,7 @@ app.get('/api/admin/leave-requests', canReview, (req, res) => {
     `SELECT lr.*, u.full_name, u.email FROM leave_requests lr JOIN users u ON u.id = lr.user_id
      ORDER BY (lr.status = 'pending') DESC, lr.created_at DESC`
   ).all();
-  res.json({ requests: rows });
+  res.json({ requests: scopeRequestRows(req, rows) });
 });
 
 app.post('/api/admin/leave-requests/:id', canDecide, (req, res) => {
@@ -600,7 +723,7 @@ app.get('/api/admin/overtime-requests', canReview, (req, res) => {
     `SELECT o.*, u.full_name, u.email FROM overtime_requests o JOIN users u ON u.id = o.user_id
      ORDER BY (o.status = 'pending') DESC, o.ot_date DESC, o.created_at DESC`
   ).all();
-  res.json({ requests: rows.map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
+  res.json({ requests: scopeRequestRows(req, rows).map(function (r) { return Object.assign(r, { reason_label: OT_REASONS[r.reason] || r.reason }); }) });
 });
 app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
   const { decision } = req.body || {};
@@ -662,7 +785,7 @@ app.get('/api/admin/loan-requests', canReview, (req, res) => {
   ).all();
   // Supervisors only handle product advances.
   if (req.user.role === 'supervisor') rows = rows.filter(function (r) { return r.loan_type === 'product_advance'; });
-  res.json({ requests: rows.map(function (r) { return Object.assign(r, { loan_type_label: LOAN_TYPES[r.loan_type] || r.loan_type }); }) });
+  res.json({ requests: scopeRequestRows(req, rows).map(function (r) { return Object.assign(r, { loan_type_label: LOAN_TYPES[r.loan_type] || r.loan_type }); }) });
 });
 
 // Approve (creating a payroll loan that is auto-deducted) or reject a loan request.
@@ -870,7 +993,7 @@ app.post('/api/integrations/product-advance/reverse', integrationAuth, (req, res
 });
 
 // Admin resets a user's password (provide one, or a random one is generated).
-app.post('/api/admin/users/:id/password', adminMgmt, (req, res) => {
+app.post('/api/admin/users/:id/password', adminMgmt, requireUnscoped, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   let pw = (req.body && req.body.password) || '';
@@ -937,7 +1060,10 @@ app.post('/api/admin/notify-payslips', A.requireAdmin, async (req, res) => {
 // Minimal employee roster (no salaries) for supervisors to pick from.
 app.get('/api/sup/employees', canReview, (req, res) => {
   const data = getCompanyData();
-  res.json({ employees: (data.employees || []).filter(function (e) { return e.active !== false; }).map(function (e) {
+  const loc = req.user.location_id || null;
+  res.json({ employees: (data.employees || []).filter(function (e) {
+    return e.active !== false && (!loc || e.locationId === loc);
+  }).map(function (e) {
     return { id: e.id, code: e.code, firstName: e.firstName, lastName: e.lastName, position: e.position,
       schedTimeIn: e.schedTimeIn, schedTimeOut: e.schedTimeOut };
   }) });

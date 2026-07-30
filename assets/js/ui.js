@@ -62,6 +62,10 @@
   var qs = function (sel, root) { return (root || document).querySelector(sel); };
 
   var state = { view: 'dashboard', selectedPeriod: null, lastRun: null, locationId: '' };
+  // A location-scoped account (set by the server) is locked to its own branch.
+  var SCOPE = null;
+  try { SCOPE = (typeof window !== 'undefined' && window.__COMPANY__ && window.__COMPANY__.scope) || null; } catch (e) { SCOPE = null; }
+  if (SCOPE && SCOPE.locationId) state.locationId = SCOPE.locationId;
 
   /* ===================== LOCATIONS (multi-branch) ===================== */
   // The configured branches/locations. Empty = single-location (feature dormant).
@@ -116,8 +120,12 @@
           return '<a href="#" class="nav-item ' + (state.view === v[0] ? 'active' : '') +
             '" data-nav="' + v[0] + '"><span class="nav-ico">' + v[2] + '</span>' + v[1] + '</a>';
         }).join('') + '</nav>' +
-        (locations().length ? '<div class="sidebar-loc" style="padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)"><label style="display:block;font-size:11px;color:#94a3b8;margin:0 0 4px">Location</label>' +
-          select('locFilter', [['', 'All locations']].concat(locations().map(function (l) { return [l.id, l.name]; })), state.locationId) + '</div>' : '') +
+        (SCOPE && SCOPE.locationId
+          ? '<div class="sidebar-loc" style="padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)"><label style="display:block;font-size:11px;color:#94a3b8;margin:0 0 4px">Location</label>' +
+            '<div style="color:#fff;font-weight:600">' + esc(SCOPE.locationName || locationName(SCOPE.locationId)) + '</div>' +
+            '<div style="font-size:11px;color:#94a3b8">Your branch</div></div>'
+          : (locations().length ? '<div class="sidebar-loc" style="padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)"><label style="display:block;font-size:11px;color:#94a3b8;margin:0 0 4px">Location</label>' +
+            select('locFilter', [['', 'All locations']].concat(locations().map(function (l) { return [l.id, l.name]; })), state.locationId) + '</div>' : '')) +
         '<div class="sidebar-foot">' + esc(S.db.meta.company.name) + '</div>' +
       '</aside>' +
       '<main class="main"><div id="view"></div></main>';
