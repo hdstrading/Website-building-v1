@@ -47,12 +47,12 @@
     var r = rates(emp);
     var freq = ctx.period.frequency || 'semi-monthly';
     var ppm = periodsPerMonth(freq);
+    var meta = (PH.storage && PH.storage.db && PH.storage.db.meta) || {};
 
     // ---- Basic / worked pay -------------------------------------------------
     var dtr = null;
     var basicPay;
     if (ctx.dtrDays && ctx.dtrDays.length) {
-      var meta = PH.storage.db.meta || {};
       var otPolicy = meta.overtime || null;
       dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, {
         defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
@@ -180,9 +180,23 @@
     // first six months). Default (undefined) means "deduct".
     var per = ctx.period;
     var legacy = per.applyContributions !== false;
-    var applySSS = (per.applySSS !== undefined ? !!per.applySSS : legacy) && (emp.deductSSS !== false);
-    var applyPH = (per.applyPhilHealth !== undefined ? !!per.applyPhilHealth : legacy) && (emp.deductPhilHealth !== false);
-    var applyPI = (per.applyPagIBIG !== undefined ? !!per.applyPagIBIG : legacy) && (emp.deductPagIBIG !== false);
+    // Which cut-off this period pays out on ('15th' or '30th') — from the period's
+    // own tag, else inferred from the pay date (<=20th = the 15th cut-off).
+    var perCut = (per.cutoff === '15th' || per.cutoff === '30th') ? per.cutoff
+      : (per.payDate && parseInt(per.payDate.split('-')[2], 10) <= 20 ? '15th' : '30th');
+    // A company-wide schedule (Settings) decides which cut-off each contribution is
+    // taken on, so admins don't toggle it every payroll. When a contribution has no
+    // scheduled cut-off, fall back to the period's own per-cutoff toggle. Either way
+    // the employee's 201-level opt-out (deductX = false) still applies.
+    var sched = meta.contributionSchedule || {};
+    function byPolicy(sKey, perKey) {
+      var s = sched[sKey];
+      if (s === '15th' || s === '30th') return perCut === s;
+      return (per[perKey] !== undefined ? !!per[perKey] : legacy);
+    }
+    var applySSS = byPolicy('sss', 'applySSS') && (emp.deductSSS !== false);
+    var applyPH = byPolicy('philhealth', 'applyPhilHealth') && (emp.deductPhilHealth !== false);
+    var applyPI = byPolicy('pagibig', 'applyPagIBIG') && (emp.deductPagIBIG !== false);
     var sssEE = applySSS ? contrib.sss.ee : 0;
     var phEE = applyPH ? contrib.philhealth.ee : 0;
     var piEE = applyPI ? contrib.pagibig.ee : 0;
@@ -203,6 +217,10 @@
     var loanDeductions = [];
     (ctx.loans || []).forEach(function (ln) {
       if (!ln.active || (ln.balance || 0) <= 0) return;
+      // Not yet effective: a loan/advance dated after this cut-off's end date is
+      // only deducted from the cut-off it falls within onward (e.g. a July 27 loan
+      // is skipped on the 11th–25th cut-off and starts on the next one).
+      if (ln.startDate && ctx.period.endDate && ln.startDate > ctx.period.endDate) return;
       var amt;
       if (ln.perCutoffAmount != null) {
         // Advances: a fixed amount is taken each cutoff (cleared within the month).

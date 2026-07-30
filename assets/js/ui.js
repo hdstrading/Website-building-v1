@@ -1037,7 +1037,8 @@
       '</div>' +
       '<h4 class="form-section">Statutory Deductions this cut-off</h4>' +
       '<p class="hint">Tick which government contributions to deduct in THIS period. ' +
-      'For semi-monthly you can, for example, deduct <b>SSS on the 15th</b> and <b>PhilHealth &amp; Pag-IBIG on the 30th</b>.</p>' +
+      'For semi-monthly you can, for example, deduct <b>SSS on the 15th</b> and <b>PhilHealth &amp; Pag-IBIG on the 30th</b>. ' +
+      'Note: if a <b>Government Deduction Schedule</b> is set in Settings, that schedule decides these automatically and overrides the boxes below.</p>' +
       '<div class="chk-row">' +
         chk('applySSS', 'SSS', p.applySSS) +
         chk('applyPhilHealth', 'PhilHealth', p.applyPhilHealth) +
@@ -1893,6 +1894,8 @@
     var lp = S.db.meta.leavePolicy || (S.db.meta.leavePolicy = { manualOpen: false, openDay: 21 });
     var t13 = S.db.meta.thirteenthPolicy || (S.db.meta.thirteenthPolicy = { deductTardiness: true });
     var nd = S.db.meta.nightDiff || (S.db.meta.nightDiff = { enabled: true });
+    var cs = S.db.meta.contributionSchedule || (S.db.meta.contributionSchedule = {});
+    var CS_OPTS = [['', 'Per-period (manual tick boxes)'], ['15th', 'Deduct on the 15th cut-off'], ['30th', 'Deduct on the 30th cut-off']];
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
@@ -1939,6 +1942,17 @@
           select('ndEnabled', [['true','On — pay the night-shift premium (10 PM–6 AM)'],['false','Off — do not pay night differential']], String(nd.enabled !== false)) +
           '<small class="hint">When off, no night-differential pay is computed for anyone. Existing finalized payrolls are unaffected.</small>'),
         '<button class="btn" id="saveNd">Save Night Differential</button>') +
+      card('Government Deduction Schedule',
+        '<p class="muted">Choose which semi-monthly cut-off each government contribution is deducted on. ' +
+        'Set once here and every payroll follows it automatically — no need to toggle per period. ' +
+        '(This governs the per-period tick boxes when set.)</p>' +
+        '<div class="grid3">' +
+        field('SSS', select('csSSS', CS_OPTS, cs.sss || '')) +
+        field('PhilHealth', select('csPH', CS_OPTS, cs.philhealth || '')) +
+        field('Pag-IBIG', select('csPI', CS_OPTS, cs.pagibig || '')) +
+        '</div>' +
+        '<p class="hint">Withholding tax is always computed on each cut-off\'s own pay and is not scheduled here.</p>',
+        '<button class="btn" id="saveCs">Save Deduction Schedule</button>') +
       card('Leave Application Window',
         '<p class="muted">Controls when employees can file leave from the portal. Sick and Emergency leave can always be filed (including recent past days); this window governs planned (Vacation) leave for future months.</p>' +
         '<div class="grid2">' +
@@ -2019,6 +2033,12 @@
       nd.enabled = v.querySelector('[name=ndEnabled]').value === 'true';
       S.save();
       toast('Night differential ' + (nd.enabled ? 'enabled' : 'disabled') + '.');
+    });
+    v.querySelector('#saveCs').addEventListener('click', function () {
+      function set(key, sel) { var val = v.querySelector(sel).value; if (val) cs[key] = val; else delete cs[key]; }
+      set('sss', '[name=csSSS]'); set('philhealth', '[name=csPH]'); set('pagibig', '[name=csPI]');
+      S.save();
+      toast('Government deduction schedule saved.');
     });
     v.querySelector('#saveLp').addEventListener('click', function () {
       var day = parseInt(v.querySelector('#lpOpenDay').value, 10);
