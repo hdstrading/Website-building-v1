@@ -61,7 +61,25 @@
   var cap = function (s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—'; };
   var qs = function (sel, root) { return (root || document).querySelector(sel); };
 
-  var state = { view: 'dashboard', selectedPeriod: null, lastRun: null };
+  var state = { view: 'dashboard', selectedPeriod: null, lastRun: null, locationId: '' };
+
+  /* ===================== LOCATIONS (multi-branch) ===================== */
+  // The configured branches/locations. Empty = single-location (feature dormant).
+  function locations() { return (S.db.meta && S.db.meta.locations) || []; }
+  function locationName(id) {
+    var l = locations().filter(function (x) { return x.id === id; })[0];
+    return l ? l.name : '';
+  }
+  // Is this employee in the currently-selected location scope? '' = all locations.
+  function inScope(emp) {
+    if (!state.locationId) return true;
+    return (emp && emp.locationId) === state.locationId;
+  }
+  // Filter a list of employees (or employee-id keys) by the active location scope.
+  function scopeEmps(list) { return (list || []).filter(inScope); }
+  function scopeIds(ids) {
+    return (ids || []).filter(function (id) { var e = S.find('employees', id); return e ? inScope(e) : true; });
+  }
 
   var VIEWS = [
     ['dashboard', 'Dashboard', '📊'],
@@ -98,6 +116,8 @@
           return '<a href="#" class="nav-item ' + (state.view === v[0] ? 'active' : '') +
             '" data-nav="' + v[0] + '"><span class="nav-ico">' + v[2] + '</span>' + v[1] + '</a>';
         }).join('') + '</nav>' +
+        (locations().length ? '<div class="sidebar-loc" style="padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)"><label style="display:block;font-size:11px;color:#94a3b8;margin:0 0 4px">Location</label>' +
+          select('locFilter', [['', 'All locations']].concat(locations().map(function (l) { return [l.id, l.name]; })), state.locationId) + '</div>' : '') +
         '<div class="sidebar-foot">' + esc(S.db.meta.company.name) + '</div>' +
       '</aside>' +
       '<main class="main"><div id="view"></div></main>';
@@ -105,6 +125,8 @@
     app.querySelectorAll('[data-nav]').forEach(function (a) {
       a.addEventListener('click', function (e) { e.preventDefault(); navigate(a.dataset.nav); });
     });
+    var locSel = app.querySelector('[name=locFilter]');
+    if (locSel) locSel.addEventListener('change', function (e) { state.locationId = e.target.value; render(); });
     renderView();
   }
 
@@ -133,7 +155,7 @@
 
   /* ===================== DASHBOARD ===================== */
   function viewDashboard(v) {
-    var emps = S.list('employees');
+    var emps = scopeEmps(S.list('employees'));
     var active = emps.filter(function (e) { return e.active !== false; });
     var loans = S.list('loans').filter(function (l) { return l.active && l.balance > 0; });
     var totalMonthly = active.reduce(function (s, e) {
@@ -176,22 +198,26 @@
 
   /* ===================== EMPLOYEES ===================== */
   function viewEmployees(v) {
-    var emps = S.list('employees');
+    var hasLoc = locations().length > 0;
+    var emps = scopeEmps(S.list('employees'));
     var rows = emps.length ? emps.map(function (e) {
       var r = PH.payroll.rates(e);
       return '<tr><td><b>' + esc(e.code) + '</b></td><td>' + esc(e.lastName + ', ' + e.firstName) +
-        '</td><td>' + esc(e.position || '') + '</td><td>' + esc(e.employmentType) +
+        '</td><td>' + esc(e.position || '') + '</td>' +
+        (hasLoc ? '<td>' + esc(locationName(e.locationId) || '—') + '</td>' : '') +
+        '<td>' + esc(e.employmentType) +
         '</td><td>' + money(e.basicSalary) + '</td><td>' + money(r.daily) +
         '</td><td>' + (e.active !== false ? '<span class="badge badge-ok">active</span>' : '<span class="badge">inactive</span>') +
         '</td><td class="row-actions">' +
         '<button class="btn-sm" data-emp-view="' + e.id + '">201 File</button>' +
         '<button class="btn-sm" data-emp-edit="' + e.id + '">Edit</button>' +
         '<button class="btn-sm btn-danger" data-emp-del="' + e.id + '">Delete</button></td></tr>';
-    }).join('') : '<tr><td colspan="8" class="muted">No employees yet. Click "Add Employee".</td></tr>';
+    }).join('') : '<tr><td colspan="' + (hasLoc ? 9 : 8) + '" class="muted">No employees' + (state.locationId ? ' in this location' : ' yet. Click "Add Employee"') + '.</td></tr>';
 
     v.innerHTML = govIdCheckCard(emps.filter(function (e) { return e.active !== false; })) +
-      card('Employees',
-      '<table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Position</th><th>Type</th>' +
+      card('Employees' + (state.locationId ? ' — ' + esc(locationName(state.locationId)) : ''),
+      '<table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Position</th>' +
+      (hasLoc ? '<th>Location</th>' : '') + '<th>Type</th>' +
       '<th>Basic</th><th>Daily Rate</th><th>Status</th><th></th></tr></thead><tbody>' +
       rows + '</tbody></table>',
       '<button class="btn" data-emp-add>+ Add Employee</button>');
@@ -270,6 +296,8 @@
         '<input name="address" value="' + esc(emp.address || '') + '"></label>' +
       '</div>' +
       '<h4 class="form-section">Employment</h4><div class="grid2">' +
+        (locations().length ? field('Location / Branch',
+          select('locationId', [['', '— none —']].concat(locations().map(function (l) { return [l.id, l.name]; })), emp.locationId || '')) : '') +
         txt('position', 'Position') + txt('department', 'Department') +
         txt('hireDate', 'Date Hired', 'date') + txt('regularizationDate', 'Regularization Date', 'date') +
         field('Employment Status',
@@ -473,7 +501,7 @@
     var period = S.find('periods', pid);
     var dtr = (S.db.dtr[pid]) || {};
 
-    var byEmp = S.list('employees').map(function (e) {
+    var byEmp = scopeEmps(S.list('employees')).map(function (e) {
       var days = dtr[e.id] || [];
       var sched = (e.schedTimeIn && e.schedTimeOut)
         ? esc(e.schedTimeIn + '–' + e.schedTimeOut)
@@ -1249,12 +1277,13 @@
     var period = S.find('periods', pid);
     var results = period.status === 'finalized' && S.db.payrolls[pid]
       ? S.db.payrolls[pid] : PH.payroll.runPeriod(period);
-    var ids = Object.keys(results);
+    var ids = scopeIds(Object.keys(results));
 
     v.innerHTML =
       card('Select Period',
         '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name + ' (' + p.status + ')']; }), pid) +
         (period.status === 'finalized' ? '<span class="badge badge-ok">finalized</span>' : '<span class="badge badge-draft">preview</span>') +
+        (state.locationId ? ' <span class="badge">' + esc(locationName(state.locationId)) + '</span>' : ' <span class="badge">All locations</span>') +
         '</div>') +
       card('A. Accounting Report — Full Payslip Detail',
         '<p class="muted">Every earning and deduction itemized per employee. For books, journal entries and audit.</p>' +
@@ -1908,6 +1937,20 @@
         field('TIN', '<input data-co="tin" value="' + esc(comp.tin || '') + '">') +
         '</div>',
         '<button class="btn" id="saveCo">Save Company Info</button>') +
+      card('Locations / Branches',
+        '<p class="muted">Set up your branches here, then assign each employee to one (on their 201). ' +
+        'Use the <b>Location</b> selector in the sidebar to view a single branch or all of them together.</p>' +
+        '<div id="locList">' + (locations().length
+          ? '<table class="tbl"><thead><tr><th>Location Name</th><th>Employees</th><th></th></tr></thead><tbody>' +
+            locations().map(function (l) {
+              var n = S.list('employees').filter(function (e) { return e.locationId === l.id; }).length;
+              return '<tr><td><input data-loc-id="' + l.id + '" value="' + esc(l.name) + '" style="width:100%"></td>' +
+                '<td>' + n + '</td><td class="row-actions"><button class="btn-sm btn-danger" data-loc-del="' + l.id + '">Delete</button></td></tr>';
+            }).join('') + '</tbody></table>'
+          : '<p class="muted">No locations yet — add your branches below.</p>') + '</div>' +
+        '<div class="inline" style="margin-top:10px"><input id="locNew" placeholder="New location name (e.g. Cebu Branch)"> ' +
+        '<button class="btn-sm" id="locAdd">+ Add Location</button></div>',
+        '<button class="btn" id="saveLocs">Save Location Names</button>') +
       card('Contribution Quick Check',
         '<p class="muted">Type a monthly salary to preview the automatic government deductions using the current rates. ' +
         'This is only a preview — it changes nothing and saves nothing.</p>' +
@@ -2018,6 +2061,34 @@
       S.save();
       toast('Company info saved.');
       render();
+    });
+    // ---- Locations / branches ----
+    S.db.meta.locations = S.db.meta.locations || [];
+    var locAdd = v.querySelector('#locAdd');
+    if (locAdd) locAdd.addEventListener('click', function () {
+      var name = (v.querySelector('#locNew').value || '').trim();
+      if (!name) { alert('Enter a location name.'); return; }
+      S.db.meta.locations.push({ id: 'loc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: name });
+      S.save(); renderView();
+    });
+    var saveLocs = v.querySelector('#saveLocs');
+    if (saveLocs) saveLocs.addEventListener('click', function () {
+      v.querySelectorAll('[data-loc-id]').forEach(function (inp) {
+        var loc = S.db.meta.locations.filter(function (l) { return l.id === inp.dataset.locId; })[0];
+        if (loc) loc.name = (inp.value || '').trim() || loc.name;
+      });
+      S.save(); toast('Locations saved.'); renderView();
+    });
+    v.querySelectorAll('[data-loc-del]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.dataset.locDel;
+        var used = S.list('employees').filter(function (e) { return e.locationId === id; }).length;
+        if (used > 0) { alert('This location still has ' + used + ' employee(s) assigned. Reassign them first, then delete.'); return; }
+        if (!confirm('Delete this location?')) return;
+        S.db.meta.locations = S.db.meta.locations.filter(function (l) { return l.id !== id; });
+        if (state.locationId === id) state.locationId = '';
+        S.save(); renderView();
+      });
     });
     v.querySelector('#saveOt').addEventListener('click', function () {
       ot.enabled = v.querySelector('[name=otEnabled]').value === 'true';

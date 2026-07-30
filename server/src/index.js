@@ -90,7 +90,7 @@ function diffCompanyData(oldD, newD) {
     ['name', 'startDate', 'endDate', 'payDate', 'status', 'frequency']);
   // Settings blocks
   const meta = function (d) { return d.meta || {}; };
-  ['company', 'overtime', 'leavePolicy', 'thirteenthPolicy', 'nightDiff', 'contributionSchedule'].forEach(function (k) {
+  ['company', 'overtime', 'leavePolicy', 'thirteenthPolicy', 'nightDiff', 'contributionSchedule', 'locations'].forEach(function (k) {
     if (JSON.stringify(meta(oldD)[k]) !== JSON.stringify(meta(newD)[k]))
       changes.push({ action: 'update', entity: 'settings', detail: k + ' changed to ' + val(meta(newD)[k]) });
   });
