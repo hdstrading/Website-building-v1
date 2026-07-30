@@ -43,6 +43,12 @@
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
   var ROLE_OPTS = [['employee', 'Employee'], ['supervisor', 'Supervisor'], ['auditor', 'Auditor (3rd-party)'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
+  // Configured locations/branches (from the loaded company document).
+  function companyLocations() { return (((window.__COMPANY__ || {}).data || {}).meta || {}).locations || []; }
+  function locOptions(sel) {
+    return [['', 'All locations']].concat(companyLocations().map(function (l) { return [l.id, l.name]; }))
+      .map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === (sel || '') ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('');
+  }
 
   function openAccessPanel() {
     var ov = document.createElement('div');
@@ -77,24 +83,30 @@
         return '<div class="acc-card" data-uid="' + u.id + '"><div><b>' + esc(u.fullName || (p.firstName + ' ' + p.lastName)) + '</b> — ' + esc(u.email) + '</div>' +
           '<div class="acc-muted">' + esc([p.position, p.contactNumber, p.sssNo && ('SSS ' + p.sssNo)].filter(Boolean).join(' • ')) + '</div>' +
           '<div class="acc-row"><select class="ap-role">' + ROLE_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === 'employee' ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+          (companyLocations().length ? '<select class="ap-loc" title="Location">' + locOptions('') + '</select>' : '') +
           '<label class="acc-chk"><input type="checkbox" class="ap-emp" checked> Create 201 record</label>' +
           '<button class="acc-btn ap-go">Approve</button></div></div>';
       }).join('');
       body.querySelectorAll('.acc-card').forEach(function (cardEl) {
         cardEl.querySelector('.ap-go').onclick = function () {
           var uid = cardEl.dataset.uid;
+          var locSel = cardEl.querySelector('.ap-loc');
           api('/api/admin/users/' + uid + '/approve', { method: 'POST', body: JSON.stringify({
-            role: cardEl.querySelector('.ap-role').value, createEmployee: cardEl.querySelector('.ap-emp').checked }) })
+            role: cardEl.querySelector('.ap-role').value, createEmployee: cardEl.querySelector('.ap-emp').checked,
+            locationId: locSel ? locSel.value : '' }) })
             .then(function () { renderTab('approvals'); });
         };
       });
     }
 
     function renderUsers(users) {
-      body.innerHTML = '<table class="acc-tbl"><thead><tr><th>Name / Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>' +
+      var hasLoc = companyLocations().length > 0;
+      body.innerHTML = '<table class="acc-tbl"><thead><tr><th>Name / Email</th><th>Role</th>' +
+        (hasLoc ? '<th>Location</th>' : '') + '<th>Status</th><th></th></tr></thead><tbody>' +
         users.map(function (u) {
           return '<tr data-uid="' + u.id + '"><td>' + esc(u.fullName || '') + '<div class="acc-muted">' + esc(u.email) + (u.employeeCode ? ' • ' + esc(u.employeeCode) : '') + '</div></td>' +
             '<td><select class="u-role">' + ROLE_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === u.role ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></td>' +
+            (hasLoc ? '<td><select class="u-loc"' + (u.role === 'superadmin' ? ' disabled title="Super Admins see all locations"' : '') + '>' + locOptions(u.locationId || '') + '</select></td>' : '') +
             '<td><span class="acc-badge ' + u.status + '">' + u.status + '</span></td>' +
             '<td class="acc-actions"><button class="acc-btn ghost u-toggle">' + (u.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
             '<button class="acc-btn ghost u-pw">Reset password</button></td></tr>';
@@ -103,6 +115,11 @@
         var uid = tr.dataset.uid;
         tr.querySelector('.u-role').onchange = function (e) {
           api('/api/admin/users/' + uid + '/role', { method: 'POST', body: JSON.stringify({ role: e.target.value }) })
+            .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } renderTab('users'); });
+        };
+        var locSel = tr.querySelector('.u-loc');
+        if (locSel) locSel.onchange = function (e) {
+          api('/api/admin/users/' + uid + '/location', { method: 'POST', body: JSON.stringify({ locationId: e.target.value }) })
             .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); renderTab('users'); } });
         };
         tr.querySelector('.u-toggle').onclick = function () {

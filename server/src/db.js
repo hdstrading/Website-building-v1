@@ -124,6 +124,9 @@ try { db.exec("ALTER TABLE overtime_requests ADD COLUMN ot_kind TEXT NOT NULL DE
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
 
+// Per-location manager scoping: when set, the user only sees/edits that location.
+try { db.exec("ALTER TABLE users ADD COLUMN location_id TEXT"); } catch (e) { /* column already present */ }
+
 // Seed the single company row with an empty data document if missing.
 function emptyCompanyData() {
   return {
