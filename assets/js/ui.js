@@ -98,6 +98,7 @@
     ['earnings', 'Allowances & Commissions', '💰'],
     ['loans', 'Loans & Deductibles', '🏦'],
     ['payroll', 'Run Payroll', '🧮'],
+    ['leavecal', 'Leave Calendar', '📅'],
     ['reports', 'Reports', '📑'],
     ['thirteenth', '13th Month Pay', '🎁'],
     ['bir', 'BIR Forms', '📄'],
@@ -105,10 +106,13 @@
     ['backup', 'Backup & Data', '💾']
   ];
 
-  // Auditors (3rd-party, read-only) see only the report views.
-  var AUDITOR_VIEWS = ['reports', 'thirteenth', 'bir'];
+  // Auditors (3rd-party, read-only) see only the report views + the leave calendar.
+  var AUDITOR_VIEWS = ['leavecal', 'reports', 'thirteenth', 'bir'];
+  // The Leave Calendar reads server data, so it only appears in the online edition.
+  var IS_ONLINE = !!(PH.storage && PH.storage.KEY === 'online');
   function visibleViews() {
-    return (PH.role === 'auditor') ? VIEWS.filter(function (v) { return AUDITOR_VIEWS.indexOf(v[0]) >= 0; }) : VIEWS;
+    var vs = (PH.role === 'auditor') ? VIEWS.filter(function (v) { return AUDITOR_VIEWS.indexOf(v[0]) >= 0; }) : VIEWS;
+    return vs.filter(function (v) { return v[0] !== 'leavecal' || IS_ONLINE; });
   }
 
   function navigate(view) { state.view = view; render(); }
@@ -153,6 +157,7 @@
       earnings: viewEarnings,
       loans: viewLoans,
       payroll: viewPayroll,
+      leavecal: viewLeaveCalendar,
       reports: viewReports,
       thirteenth: viewThirteenth,
       bir: viewBIR,
@@ -1280,6 +1285,68 @@
         r.withholdingTax, loans.toFixed(2), lu.toFixed(2), r.totalDeductions, r.netPay].join(','));
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_payroll.csv', lines.join('\n'), 'text/csv');
+  }
+
+  /* ===================== LEAVE CALENDAR ===================== */
+  var leaveCalState = { month: null, incPend: true, rows: [] };
+  var LC_COLORS = { SL: '#2563eb', VL: '#0a7d33', EL: '#d97706', UAL: '#6b7280', '': '#334155' };
+  function viewLeaveCalendar(v) {
+    if (!leaveCalState.month) { var t = new Date(); leaveCalState.month = new Date(t.getFullYear(), t.getMonth(), 1); }
+    v.innerHTML = card('Leave Calendar', '<p class="muted">Loading…</p>');
+    fetch('/api/leave-calendar', { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = (j && j.requests) || [];
+        // Central admins can narrow to one branch via the sidebar location filter.
+        if (state.locationId) {
+          var loc = {}; S.list('employees').forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+          rows = rows.filter(function (r) { return loc[r.employee_code] === state.locationId; });
+        }
+        leaveCalState.rows = rows;
+        drawLeaveCal(v);
+      })
+      .catch(function () { v.innerHTML = card('Leave Calendar', '<p class="muted">Could not load leave data.</p>'); });
+  }
+  function drawLeaveCal(v) {
+    var m = leaveCalState.month, rows = leaveCalState.rows || [];
+    var y = m.getFullYear(), mo = m.getMonth();
+    var first = new Date(y, mo, 1), daysIn = new Date(y, mo + 1, 0).getDate();
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    var cells = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(function (d) {
+      return '<div style="text-align:center;font-size:11px;color:#94a3b8;font-weight:700;padding:4px 0">' + d + '</div>';
+    });
+    for (var i = 0; i < first.getDay(); i++) cells.push('<div></div>');
+    for (var day = 1; day <= daysIn; day++) {
+      var iso = y + '-' + p2(mo + 1) + '-' + p2(day);
+      var on = rows.filter(function (r) {
+        if (!leaveCalState.incPend && r.status !== 'approved') return false;
+        return r.date_from <= iso && iso <= r.date_to;
+      });
+      var chips = on.map(function (r) {
+        var c = LC_COLORS[r.leave_type] || LC_COLORS[''];
+        var pending = r.status !== 'approved';
+        return '<div title="' + esc((r.full_name || r.email) + ' — ' + r.leave_type + ' (' + r.status + ')') + '" ' +
+          'style="font-size:10px;line-height:1.3;margin-top:2px;padding:1px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;background:' + c + ';' + (pending ? 'opacity:.55;border:1px dashed #fff' : '') + '">' +
+          esc((r.full_name || r.email || '').split(' ')[0]) + ' · ' + esc(r.leave_type) + '</div>';
+      }).join('');
+      cells.push('<div style="min-height:70px;border:1px solid #e2e8f0;border-radius:6px;padding:3px;background:' + (on.length ? '#f8fafc' : '#fff') + '">' +
+        '<div style="font-size:11px;color:#64748b;font-weight:600">' + day + '</div>' + chips + '</div>');
+    }
+    var scopeLabel = state.locationId ? ' — ' + esc(locationName(state.locationId)) : '';
+    var head =
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">' +
+        '<div><button class="btn-sm" id="lcPrev">‹</button> <b style="margin:0 8px">' + MONTHS[mo] + ' ' + y + '</b> <button class="btn-sm" id="lcNext">›</button></div>' +
+        '<label class="chk"><input type="checkbox" id="lcPend"' + (leaveCalState.incPend ? ' checked' : '') + '> Include pending</label>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">' + cells.join('') + '</div>' +
+      '<div class="muted" style="margin-top:8px;font-size:11px">' +
+        Object.keys(LC_COLORS).filter(function (k) { return k; }).map(function (k) {
+          return '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + LC_COLORS[k] + ';margin:0 3px 0 10px;vertical-align:middle"></span>' + k;
+        }).join('') + ' &nbsp;·&nbsp; dashed = pending</div>';
+    v.innerHTML = card('Leave Calendar' + scopeLabel, head);
+    v.querySelector('#lcPrev').addEventListener('click', function () { leaveCalState.month = new Date(y, mo - 1, 1); drawLeaveCal(v); });
+    v.querySelector('#lcNext').addEventListener('click', function () { leaveCalState.month = new Date(y, mo + 1, 1); drawLeaveCal(v); });
+    v.querySelector('#lcPend').addEventListener('change', function (e) { leaveCalState.incPend = e.target.checked; drawLeaveCal(v); });
   }
 
   /* ===================== REPORTS ===================== */
