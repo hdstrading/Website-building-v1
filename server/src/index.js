@@ -1211,6 +1211,22 @@ app.get('/api/me/leave', A.requireAuth, (req, res) => {
   const rows = db.prepare('SELECT * FROM leave_requests WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
   res.json({ requests: rows });
 });
+// Shared team calendar for employees: APPROVED leaves of their own branch (all
+// branches when none are configured). Names + type only — no reason (privacy).
+app.get('/api/me/leave-calendar', A.requireAuth, (req, res) => {
+  const data = getCompanyData();
+  const me = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+  const myLoc = me ? (me.locationId || null) : null;
+  const hasLocs = ((data.meta && data.meta.locations) || []).length > 0;
+  const byCode = {}; (data.employees || []).forEach(function (e) { if (e.code) byCode[e.code] = e.locationId || null; });
+  let rows = db.prepare(
+    `SELECT lr.employee_code, lr.date_from, lr.date_to, lr.leave_type, u.full_name
+     FROM leave_requests lr JOIN users u ON u.id = lr.user_id
+     WHERE lr.status = 'approved' ORDER BY lr.date_from`
+  ).all();
+  if (hasLocs) rows = rows.filter(function (r) { return byCode[r.employee_code] === myLoc; });
+  res.json({ requests: rows });
+});
 app.get('/api/me/leave-window', A.requireAuth, (req, res) => {
   const data = getCompanyData();
   const pol = leavePolicyOf(data);
