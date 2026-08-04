@@ -96,6 +96,7 @@
     <a href="#" class="active" data-tab="profile">My 201</a>
     <a href="#" data-tab="dtr">My DTR</a>
     <a href="#" data-tab="leave">File Leave</a>
+    <a href="#" data-tab="teamcal">Team Calendar</a>
     <a href="#" data-tab="overtime">Overtime</a>
     <a href="#" data-tab="loans">Loans</a>
     <a href="#" data-tab="payslips">My Payslips</a>
@@ -178,7 +179,7 @@
     });
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
-      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, overtime: viewOvertime, loans: viewLoans,
+      ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, teamcal: viewTeamCal, overtime: viewOvertime, loans: viewLoans,
          payslips: viewPayslips, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
@@ -499,6 +500,48 @@
           ? '<table><thead><tr><th>Dates</th><th>Type</th><th>Reason</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table>'
           : '<p class="muted">No requests yet.</p>';
       });
+    }
+
+    // ---- Team Calendar (shared, approved leaves of your branch) ----
+    var TC_COLORS = { SL: '#2563eb', VL: '#0a7d33', EL: '#d97706', UAL: '#6b7280', '': '#334155' };
+    var teamCal = { month: null, rows: [] };
+    function viewTeamCal() {
+      if (!teamCal.month) { var t = new Date(); teamCal.month = new Date(t.getFullYear(), t.getMonth(), 1); }
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Team Leave Calendar</h2><div class="in" id="tcBody">Loading…</div></div>';
+      api('/api/me/leave-calendar').then(function (r) {
+        teamCal.rows = (r.body && r.body.requests) || [];
+        drawTeamCal();
+      });
+    }
+    function drawTeamCal() {
+      var m = teamCal.month, rows = teamCal.rows, y = m.getFullYear(), mo = m.getMonth();
+      var first = new Date(y, mo, 1), daysIn = new Date(y, mo + 1, 0).getDate();
+      var cells = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(function (d) {
+        return '<div style="text-align:center;font-size:11px;color:#94a3b8;font-weight:700;padding:4px 0">' + d + '</div>';
+      });
+      for (var i = 0; i < first.getDay(); i++) cells.push('<div></div>');
+      for (var day = 1; day <= daysIn; day++) {
+        var iso = y + '-' + pad2(mo + 1) + '-' + pad2(day);
+        var on = rows.filter(function (r) { return r.date_from <= iso && iso <= r.date_to; });
+        var chips = on.map(function (r) {
+          var c = TC_COLORS[r.leave_type] || TC_COLORS[''];
+          return '<div title="' + esc((r.full_name || '') + ' — ' + r.leave_type) + '" style="font-size:10px;line-height:1.3;margin-top:2px;padding:1px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#fff;background:' + c + '">' +
+            esc((r.full_name || '').split(' ')[0]) + ' · ' + esc(r.leave_type) + '</div>';
+        }).join('');
+        cells.push('<div style="min-height:66px;border:1px solid #e2e8f0;border-radius:6px;padding:3px;background:' + (on.length ? '#f8fafc' : '#fff') + '">' +
+          '<div style="font-size:11px;color:#64748b;font-weight:600">' + day + '</div>' + chips + '</div>');
+      }
+      document.getElementById('tcBody').innerHTML =
+        '<div class="cal-head"><button class="cal-nav" id="tcPrev">‹</button><b>' + MONTHS[mo] + ' ' + y + '</b><button class="cal-nav" id="tcNext">›</button></div>' +
+        '<p class="muted" style="font-size:12px;margin:0 0 8px">Approved leaves for your team. Only names and leave type are shown.</p>' +
+        '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">' + cells.join('') + '</div>' +
+        '<div class="legend" style="font-size:11px">' +
+          Object.keys(TC_COLORS).filter(function (k) { return k; }).map(function (k) {
+            return '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + TC_COLORS[k] + ';margin:0 3px 0 10px;vertical-align:middle"></span>' + k;
+          }).join('') + '</div>';
+      document.getElementById('tcPrev').onclick = function () { teamCal.month = new Date(y, mo - 1, 1); drawTeamCal(); };
+      document.getElementById('tcNext').onclick = function () { teamCal.month = new Date(y, mo + 1, 1); drawTeamCal(); };
     }
 
     // ---- Loans ----
