@@ -707,6 +707,17 @@ app.post('/api/admin/users/:id/status', adminMgmt, requireUnscoped, (req, res) =
   res.json({ ok: true });
 });
 
+// Read-only leave feed for the whole-month Leave Calendar view (all admin-app
+// roles, including auditors and finance). Location-scoped like the other feeds.
+app.get('/api/leave-calendar', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT lr.employee_code, lr.date_from, lr.date_to, lr.leave_type, lr.status, lr.reason, u.full_name, u.email
+     FROM leave_requests lr JOIN users u ON u.id = lr.user_id
+     WHERE lr.status != 'rejected' ORDER BY lr.date_from`
+  ).all();
+  res.json({ requests: scopeRequestRows(req, rows) });
+});
+
 app.get('/api/admin/leave-requests', canReview, (req, res) => {
   const rows = db.prepare(
     `SELECT lr.*, u.full_name, u.email FROM leave_requests lr JOIN users u ON u.id = lr.user_id
