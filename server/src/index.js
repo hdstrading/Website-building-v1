@@ -257,27 +257,38 @@ function isoYMD(y, m, d) { return y + '-' + pad2i(m) + '-' + pad2i(d); }
 function isoOf(dt) { return isoYMD(dt.getFullYear(), dt.getMonth() + 1, dt.getDate()); }
 function lastDayOfMonth(y, m) { return new Date(y, m, 0).getDate(); } // m = 1-12
 function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
-// The two cutoff periods for calendar month y/m (m = 1-12).
-function periodsForMonth(y, m) {
+// The two cutoff periods for calendar month y/m (m = 1-12). When a location is
+// given, the periods belong to that branch (own id/name) so each branch runs and
+// finalizes payroll independently; otherwise they are shared (single-branch).
+function periodsForMonth(y, m, loc) {
   const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y;
-  const p1 = { id: 'p_' + y + '-' + pad2i(m) + '_15', cutoff: '15th', frequency: 'semi-monthly', status: 'open', auto: true,
-    name: MONTHS[m - 1] + ' ' + y + ' — 15th pay',
-    startDate: isoYMD(py, pm, 26), endDate: isoYMD(y, m, 10), payDate: isoYMD(y, m, 15) };
+  const pre = loc ? ('p_' + loc.id + '_' + y + '-' + pad2i(m)) : ('p_' + y + '-' + pad2i(m));
+  const suffix = loc ? ' [' + loc.name + ']' : '';
   const payD = Math.min(30, lastDayOfMonth(y, m)); // last day when the month has no 30th (Feb)
-  const p2 = { id: 'p_' + y + '-' + pad2i(m) + '_30', cutoff: '30th', frequency: 'semi-monthly', status: 'open', auto: true,
-    name: MONTHS[m - 1] + ' ' + y + ' — 30th pay',
-    startDate: isoYMD(y, m, 11), endDate: isoYMD(y, m, 25), payDate: isoYMD(y, m, payD) };
+  const base = { frequency: 'semi-monthly', status: 'open', auto: true };
+  if (loc) { base.locationId = loc.id; }
+  const p1 = Object.assign({}, base, { id: pre + '_15', cutoff: '15th',
+    name: MONTHS[m - 1] + ' ' + y + ' — 15th pay' + suffix,
+    startDate: isoYMD(py, pm, 26), endDate: isoYMD(y, m, 10), payDate: isoYMD(y, m, 15) });
+  const p2 = Object.assign({}, base, { id: pre + '_30', cutoff: '30th',
+    name: MONTHS[m - 1] + ' ' + y + ' — 30th pay' + suffix,
+    startDate: isoYMD(y, m, 11), endDate: isoYMD(y, m, 25), payDate: isoYMD(y, m, payD) });
   return [p1, p2];
 }
 // Ensure the current and next month's cutoff periods exist (idempotent by id).
+// With locations configured, generate one set per location; otherwise a shared set.
 function ensurePeriods(data, today) {
   data.periods = data.periods || [];
   const have = {}; data.periods.forEach(function (p) { have[p.id] = true; });
   const y = today.getFullYear(), m = today.getMonth() + 1;
   const months = [[y, m], [m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1]];
+  const locs = (data.meta && data.meta.locations) || [];
+  const targets = locs.length ? locs : [null];
   let changed = false;
   months.forEach(function (ym) {
-    periodsForMonth(ym[0], ym[1]).forEach(function (p) { if (!have[p.id]) { data.periods.push(p); changed = true; } });
+    targets.forEach(function (loc) {
+      periodsForMonth(ym[0], ym[1], loc).forEach(function (p) { if (!have[p.id]) { data.periods.push(p); changed = true; } });
+    });
   });
   return changed;
 }

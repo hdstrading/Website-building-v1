@@ -47,7 +47,15 @@
     var r = rates(emp);
     var freq = ctx.period.frequency || 'semi-monthly';
     var ppm = periodsPerMonth(freq);
-    var meta = (PH.storage && PH.storage.db && PH.storage.db.meta) || {};
+    var rawMeta = (PH.storage && PH.storage.db && PH.storage.db.meta) || {};
+    // A location can override company policies; a blank/absent override falls back
+    // to the company default. Only payroll-affecting policies are resolved here.
+    var locOv = (rawMeta.locationSettings && emp.locationId && rawMeta.locationSettings[emp.locationId]) || {};
+    var meta = {
+      overtime: (locOv.overtime !== undefined ? locOv.overtime : rawMeta.overtime),
+      nightDiff: (locOv.nightDiff !== undefined ? locOv.nightDiff : rawMeta.nightDiff),
+      contributionSchedule: (locOv.contributionSchedule !== undefined ? locOv.contributionSchedule : rawMeta.contributionSchedule)
+    };
 
     // ---- Basic / worked pay -------------------------------------------------
     var dtr = null;
@@ -278,7 +286,11 @@
     var results = {};
     var dtrForPeriod = (S.db.dtr[period.id]) || {};
     var adjForPeriod = (S.db.adjustments[period.id]) || {};
-    S.list('employees').filter(function (e) { return e.active !== false; }).forEach(function (emp) {
+    // A per-location period only pays its own branch's employees. Legacy periods
+    // with no locationId (single-branch setups) pay everyone, as before.
+    S.list('employees').filter(function (e) {
+      return e.active !== false && (!period.locationId || e.locationId === period.locationId);
+    }).forEach(function (emp) {
       var ctx = {
         period: period,
         dtrDays: dtrForPeriod[emp.id] || null,
