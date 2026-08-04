@@ -65,6 +65,8 @@
       a.onclick = function () { ov.querySelectorAll('.acc-tabs a').forEach(function (x) { x.classList.remove('active'); }); a.classList.add('active'); renderTab(a.dataset.at); };
     });
     var body = ov.querySelector('#acc-body');
+    var leaveMonth = new Date(); leaveMonth = new Date(leaveMonth.getFullYear(), leaveMonth.getMonth(), 1);
+    var leaveIncludePending = true;
 
     function renderTab(tab) {
       body.innerHTML = 'Loading…';
@@ -138,9 +140,56 @@
       });
     }
 
+    // Month calendar of applied leaves (approved + optionally pending).
+    var LV_COLORS = { SL: '#2563eb', VL: '#0a7d33', EL: '#d97706', UAL: '#6b7280', '': '#334155' };
+    var LV_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    function lvPad(n) { return (n < 10 ? '0' : '') + n; }
+    function drawLeaveCalendar(reqs) {
+      var el = document.getElementById('lv-cal'); if (!el) return;
+      var y = leaveMonth.getFullYear(), m = leaveMonth.getMonth();
+      var first = new Date(y, m, 1), daysIn = new Date(y, m + 1, 0).getDate();
+      var cells = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(function (d) {
+        return '<div style="text-align:center;font-size:11px;color:#94a3b8;font-weight:700;padding:4px 0">' + d + '</div>';
+      });
+      for (var i = 0; i < first.getDay(); i++) cells.push('<div></div>');
+      for (var day = 1; day <= daysIn; day++) {
+        var iso = y + '-' + lvPad(m + 1) + '-' + lvPad(day);
+        var on = reqs.filter(function (r) {
+          if (r.status === 'rejected') return false;
+          if (!leaveIncludePending && r.status !== 'approved') return false;
+          return r.date_from <= iso && iso <= r.date_to;
+        });
+        var chips = on.map(function (r) {
+          var c = LV_COLORS[r.leave_type] || LV_COLORS[''];
+          var pending = r.status !== 'approved';
+          return '<div title="' + esc((r.full_name || r.email) + ' — ' + r.leave_type + ' (' + r.status + ')') + '" ' +
+            'style="font-size:10px;line-height:1.3;margin-top:2px;padding:1px 4px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+            'color:#fff;background:' + c + ';' + (pending ? 'opacity:.55;border:1px dashed #fff' : '') + '">' +
+            esc((r.full_name || r.email || '').split(' ')[0]) + ' · ' + esc(r.leave_type) + '</div>';
+        }).join('');
+        cells.push('<div style="min-height:64px;border:1px solid #e2e8f0;border-radius:6px;padding:3px;background:' + (on.length ? '#f8fafc' : '#fff') + '">' +
+          '<div style="font-size:11px;color:#64748b;font-weight:600">' + day + '</div>' + chips + '</div>');
+      }
+      el.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+          '<div><button class="acc-btn ghost" id="lv-prev">‹</button> <b style="margin:0 8px">' + LV_MONTHS[m] + ' ' + y + '</b> <button class="acc-btn ghost" id="lv-next">›</button></div>' +
+          '<label class="acc-chk"><input type="checkbox" id="lv-pend"' + (leaveIncludePending ? ' checked' : '') + '> Include pending</label>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">' + cells.join('') + '</div>' +
+        '<div class="acc-muted" style="margin-top:6px;font-size:11px">' +
+          Object.keys(LV_COLORS).filter(function (k) { return k; }).map(function (k) {
+            return '<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' + LV_COLORS[k] + ';margin:0 3px 0 10px;vertical-align:middle"></span>' + k;
+          }).join('') + ' &nbsp;·&nbsp; dashed = pending</div>';
+      document.getElementById('lv-prev').onclick = function () { leaveMonth = new Date(y, m - 1, 1); drawLeaveCalendar(reqs); };
+      document.getElementById('lv-next').onclick = function () { leaveMonth = new Date(y, m + 1, 1); drawLeaveCalendar(reqs); };
+      document.getElementById('lv-pend').onchange = function (e) { leaveIncludePending = e.target.checked; drawLeaveCalendar(reqs); };
+    }
+
     function renderLeave(reqs) {
-      if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No leave requests.</p>'; return; }
-      body.innerHTML = '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Dates</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' +
+      var calWrap = '<div id="lv-cal" style="margin-bottom:16px"></div>';
+      if (!reqs.length) { body.innerHTML = calWrap + '<p class="acc-muted">No leave requests.</p>'; drawLeaveCalendar(reqs); return; }
+      body.innerHTML = calWrap + '<h4 style="margin:6px 0">All Leave Requests</h4>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Dates</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' +
         reqs.map(function (x) {
           return '<tr data-lid="' + x.id + '"><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.date_from) + ' → ' + esc(x.date_to) +
             (x.reason ? '<div class="acc-muted">' + esc(x.reason) + '</div>' : '') + '</td><td>' + esc(x.leave_type) + '</td>' +
@@ -154,6 +203,7 @@
         if (no) no.onclick = function () { decide(lid, 'rejected'); };
       });
       function decide(lid, d) { api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('leave'); }); }
+      drawLeaveCalendar(reqs);
     }
 
     function renderOvertime(reqs) {
