@@ -25,7 +25,9 @@ function computePeriod(companyData, period) {
   const PH = loadEngine();
   PH.storage = { db: companyData }; // computeEmployee reads meta.overtime + otApprovals here
   const results = {};
-  (companyData.employees || []).filter(function (e) { return e.active !== false; }).forEach(function (emp) {
+  (companyData.employees || []).filter(function (e) {
+    return e.active !== false && (!period.locationId || e.locationId === period.locationId);
+  }).forEach(function (emp) {
     const dtrDays = ((companyData.dtr || {})[period.id] || {})[emp.id] || null;
     const allowances = (companyData.allowances || []).filter(function (a) { return a.employeeId === emp.id; });
     const adjustments = ((companyData.adjustments || {})[period.id] || {})[emp.id] || [];

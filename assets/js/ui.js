@@ -84,6 +84,12 @@
   function scopeIds(ids) {
     return (ids || []).filter(function (id) { var e = S.find('employees', id); return e ? inScope(e) : true; });
   }
+  // Periods visible in the current location scope: the branch's own periods plus
+  // any legacy shared periods (no locationId). '' scope = all periods.
+  function scopePeriods(list) {
+    if (!state.locationId) return list || [];
+    return (list || []).filter(function (p) { return !p.locationId || p.locationId === state.locationId; });
+  }
 
   var VIEWS = [
     ['dashboard', 'Dashboard', '📊'],
@@ -179,7 +185,7 @@
         stat('Loan Balance', money(loanBal), '📉') +
       '</div>';
 
-    var periods = S.list('periods');
+    var periods = scopePeriods(S.list('periods'));
     var periodRows = periods.length ? periods.map(function (p) {
       return '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.startDate) + ' → ' + esc(p.endDate) +
         '</td><td>' + esc(p.frequency) + '</td><td><span class="badge ' +
@@ -498,7 +504,7 @@
 
   /* ===================== DTR ===================== */
   function viewDTR(v) {
-    var periods = S.list('periods');
+    var periods = scopePeriods(S.list('periods'));
     if (!periods.length) {
       v.innerHTML = card('DTR / Time Records',
         '<p class="muted">Create a payroll period first (under "Run Payroll") to attach a DTR.</p>');
@@ -965,7 +971,7 @@
 
   /* ===================== RUN PAYROLL ===================== */
   function viewPayroll(v) {
-    var periods = S.list('periods');
+    var periods = scopePeriods(S.list('periods'));
     var pid = state.selectedPeriod || (periods[0] && periods[0].id);
     state.selectedPeriod = pid;
 
@@ -1085,6 +1091,9 @@
       d.applySSS = !!d.applySSS; d.applyPhilHealth = !!d.applyPhilHealth; d.applyPagIBIG = !!d.applyPagIBIG;
       delete d.applyContributions;
       if (!d.name) { alert('Period name required.'); return false; }
+      // New periods created while a branch is selected belong to that branch.
+      if (!p.id) { if (state.locationId) d.locationId = state.locationId; }
+      else if (p.locationId) d.locationId = p.locationId;
       var saved = S.upsert('periods', d);
       state.selectedPeriod = saved.id; renderView();
     });
@@ -1275,7 +1284,7 @@
 
   /* ===================== REPORTS ===================== */
   function viewReports(v) {
-    var periods = S.list('periods');
+    var periods = scopePeriods(S.list('periods'));
     if (!periods.length) {
       v.innerHTML = card('Reports', '<p class="muted">Create a payroll period first.</p>');
       return;
@@ -1927,16 +1936,40 @@
   function viewSettings(v) {
     var c = PH.statutory.config;
     var comp = S.db.meta.company;
-    var ot = S.db.meta.overtime || (S.db.meta.overtime = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 });
     var lp = S.db.meta.leavePolicy || (S.db.meta.leavePolicy = { manualOpen: false, openDay: 21 });
     var t13 = S.db.meta.thirteenthPolicy || (S.db.meta.thirteenthPolicy = { deductTardiness: true });
-    var nd = S.db.meta.nightDiff || (S.db.meta.nightDiff = { enabled: true });
-    var cs = S.db.meta.contributionSchedule || (S.db.meta.contributionSchedule = {});
+    // When a location is selected in the sidebar, the three payroll-policy cards
+    // (Overtime, Night Differential, Deduction Schedule) edit THAT branch's
+    // override; otherwise they edit the company-wide default.
+    var editingLoc = state.locationId || '';
+    var LS = editingLoc ? ((S.db.meta.locationSettings || {})[editingLoc] || {}) : {};
+    var OT_DEFAULT = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 };
+    // Display values: the branch override if it exists, else the company default.
+    var ot = editingLoc ? (LS.overtime || S.db.meta.overtime || OT_DEFAULT) : (S.db.meta.overtime || (S.db.meta.overtime = OT_DEFAULT));
+    var nd = editingLoc ? (LS.nightDiff || S.db.meta.nightDiff || { enabled: true }) : (S.db.meta.nightDiff || (S.db.meta.nightDiff = { enabled: true }));
+    var cs = editingLoc ? (LS.contributionSchedule || S.db.meta.contributionSchedule || {}) : (S.db.meta.contributionSchedule || (S.db.meta.contributionSchedule = {}));
+    // Resolve (and lazily create) the object a Save should write to.
+    function policyTarget(key, dflt) {
+      if (editingLoc) {
+        S.db.meta.locationSettings = S.db.meta.locationSettings || {};
+        var b = S.db.meta.locationSettings[editingLoc] || (S.db.meta.locationSettings[editingLoc] = {});
+        return b[key] || (b[key] = JSON.parse(JSON.stringify(S.db.meta[key] || dflt)));
+      }
+      return S.db.meta[key] || (S.db.meta[key] = dflt);
+    }
     var CS_OPTS = [['', 'Per-period (manual tick boxes)'], ['15th', 'Deduct on the 15th cut-off'], ['30th', 'Deduct on the 30th cut-off']];
     function num(path, val, step) {
       return '<input data-cfg="' + path + '" type="number" step="' + (step || 'any') + '" value="' + val + '">';
     }
-    v.innerHTML =
+    var policyBanner = editingLoc
+      ? '<section class="card"><div class="card-body" style="background:#eef6ff;border-radius:8px">' +
+        '<b>Editing payroll policies for ' + esc(locationName(editingLoc)) + '.</b> ' +
+        'The Overtime, Night Differential and Deduction Schedule cards below set this branch\'s override (blank = follow the company default). ' +
+        'Company &amp; statutory settings stay company-wide. ' +
+        (((S.db.meta.locationSettings || {})[editingLoc]) ? '<button class="btn-sm" id="resetLocPol">Reset ' + esc(locationName(editingLoc)) + ' to company default</button>' : '') +
+        ' <span class="muted">Switch the sidebar to “All locations” to edit the company defaults.</span></div></section>'
+      : (locations().length ? '<section class="card"><div class="card-body muted">Editing <b>company-wide</b> defaults. Pick a branch in the sidebar to set a per-branch override for Overtime, Night Differential or Deduction Schedule.</div></section>' : '');
+    v.innerHTML = policyBanner +
       card('Company Information',
         '<p class="muted">Shown on payslips, the 201 file and reports. For most users, this is the only section you need to fill in.</p>' +
         '<div class="grid2">' +
@@ -2098,26 +2131,36 @@
         S.save(); renderView();
       });
     });
+    var locSuffix = editingLoc ? ' for ' + locationName(editingLoc) : '';
+    var resetBtn = v.querySelector('#resetLocPol');
+    if (resetBtn) resetBtn.addEventListener('click', function () {
+      if (!confirm('Reset ' + locationName(editingLoc) + ' to the company-default policies?')) return;
+      if (S.db.meta.locationSettings) delete S.db.meta.locationSettings[editingLoc];
+      S.save(); renderView();
+    });
     v.querySelector('#saveOt').addEventListener('click', function () {
-      ot.enabled = v.querySelector('[name=otEnabled]').value === 'true';
-      ot.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
-      ot.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
-      ot.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
-      ot.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
-      ot.requireAuthorization = v.querySelector('[name=otRequireAuth]').value === 'true';
+      var t = policyTarget('overtime', OT_DEFAULT);
+      t.enabled = v.querySelector('[name=otEnabled]').value === 'true';
+      t.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
+      t.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
+      t.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
+      t.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
+      t.requireAuthorization = v.querySelector('[name=otRequireAuth]').value === 'true';
       S.save();
-      toast('Overtime policy saved.');
+      toast('Overtime policy saved' + locSuffix + '.');
     });
     v.querySelector('#saveNd').addEventListener('click', function () {
-      nd.enabled = v.querySelector('[name=ndEnabled]').value === 'true';
+      var t = policyTarget('nightDiff', { enabled: true });
+      t.enabled = v.querySelector('[name=ndEnabled]').value === 'true';
       S.save();
-      toast('Night differential ' + (nd.enabled ? 'enabled' : 'disabled') + '.');
+      toast('Night differential ' + (t.enabled ? 'enabled' : 'disabled') + locSuffix + '.');
     });
     v.querySelector('#saveCs').addEventListener('click', function () {
-      function set(key, sel) { var val = v.querySelector(sel).value; if (val) cs[key] = val; else delete cs[key]; }
+      var t = policyTarget('contributionSchedule', {});
+      function set(key, sel) { var val = v.querySelector(sel).value; if (val) t[key] = val; else delete t[key]; }
       set('sss', '[name=csSSS]'); set('philhealth', '[name=csPH]'); set('pagibig', '[name=csPI]');
       S.save();
-      toast('Government deduction schedule saved.');
+      toast('Government deduction schedule saved' + locSuffix + '.');
     });
     v.querySelector('#saveLp').addEventListener('click', function () {
       var day = parseInt(v.querySelector('#lpOpenDay').value, 10);
