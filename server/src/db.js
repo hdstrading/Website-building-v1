@@ -127,6 +127,23 @@ try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAUL
 // Per-location manager scoping: when set, the user only sees/edits that location.
 try { db.exec("ALTER TABLE users ADD COLUMN location_id TEXT"); } catch (e) { /* column already present */ }
 
+// Employee-uploaded physical time cards (photo/scan) for a payroll period. The
+// image is kept as base64 so it persists in the same DB volume as everything else.
+db.exec(`
+CREATE TABLE IF NOT EXISTS time_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  period_id TEXT,
+  mime TEXT NOT NULL DEFAULT 'image/jpeg',
+  data TEXT NOT NULL,
+  note TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_timecards_user ON time_cards(user_id);
+CREATE INDEX IF NOT EXISTS idx_timecards_period ON time_cards(period_id);
+`);
+
 // Seed the single company row with an empty data document if missing.
 function emptyCompanyData() {
   return {

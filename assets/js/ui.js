@@ -558,7 +558,12 @@
         byEmp + '</tbody></table>') +
       ((S.db.meta.overtime && S.db.meta.overtime.requireAuthorization !== false) ? card('Overtime Authorization',
         '<p class="muted">Overtime is only paid when authorized. Review the overtime detected in this period\'s punches and authorize it here — no need to wait for employees to file. Covers post-shift and pre-shift (early time-in) overtime.</p>' +
-        '<button class="btn" id="otAuthBtn">Review &amp; Authorize Overtime</button>', '') : '');
+        '<button class="btn" id="otAuthBtn">Review &amp; Authorize Overtime</button>', '') : '') +
+      (IS_ONLINE ? card('Uploaded Time Cards — ' + esc(period.name),
+        '<p class="muted">Photos/scans of physical time cards submitted by employees for this period, for reference when checking the DTR.</p>' +
+        '<div id="tcAdmin">Loading…</div>') : '');
+
+    if (IS_ONLINE) loadAdminTimecards(pid);
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
@@ -1285,6 +1290,32 @@
         r.withholdingTax, loans.toFixed(2), lu.toFixed(2), r.totalDeductions, r.netPay].join(','));
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_payroll.csv', lines.join('\n'), 'text/csv');
+  }
+
+  // Gallery of employee-uploaded physical time cards for a period (admin DTR view).
+  function loadAdminTimecards(pid) {
+    var el = document.getElementById('tcAdmin'); if (!el) return;
+    fetch('/api/admin/timecards?periodId=' + encodeURIComponent(pid), { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = (j && j.timecards) || [];
+        if (state.locationId) {
+          var loc = {}; S.list('employees').forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+          rows = rows.filter(function (t) { return loc[t.employee_code] === state.locationId; });
+        }
+        if (!rows.length) { el.innerHTML = '<p class="muted">No time cards uploaded for this period.</p>'; return; }
+        el.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:12px">' + rows.map(function (t) {
+          var isPdf = t.mime === 'application/pdf';
+          var thumb = isPdf
+            ? '<div style="width:96px;height:96px;display:flex;align-items:center;justify-content:center;font-size:34px;border:1px solid #e2e8f0;border-radius:8px">📄</div>'
+            : '<img src="/api/timecard/' + t.id + '" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #e2e8f0">';
+          return '<a href="/api/timecard/' + t.id + '" target="_blank" style="text-decoration:none;color:inherit;width:112px">' + thumb +
+            '<div style="font-size:12px;font-weight:600;margin-top:3px">' + esc(t.full_name || t.employee_code || '') + '</div>' +
+            (t.note ? '<div style="font-size:11px;color:#64748b">' + esc(t.note) + '</div>' : '') +
+            '<div style="font-size:10px;color:#94a3b8">' + esc((t.created_at || '').slice(0, 10)) + '</div></a>';
+        }).join('') + '</div>';
+      })
+      .catch(function () { el.innerHTML = '<p class="muted">Could not load time cards.</p>'; });
   }
 
   /* ===================== LEAVE CALENDAR ===================== */
