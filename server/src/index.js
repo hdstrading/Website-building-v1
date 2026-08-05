@@ -317,8 +317,10 @@ function runDailyJobs() {
           'The cutoff for ' + p.name + ' closes on ' + p.endDate + '. File any leave or overtime now — anything after that is credited to the next cutoff.');
         p.reminderSent = true; changed = true;
       }
-      // 2) Auto-compute a draft payroll once the cutoff has ended (once).
-      if (!p.autoComputed && today > end) {
+      // 2) Auto-compute a draft payroll once the cutoff has ended (once) — but
+      // ONLY when DTR has actually been uploaded for this period. With no DTR
+      // there is nothing to base a payroll on, so no draft is generated.
+      if (!p.autoComputed && today > end && periodHasDtr(data, p.id)) {
         try {
           const results = engine.computePeriod(data, p);
           data.payrolls = data.payrolls || {};
@@ -341,6 +343,12 @@ function nextOpenPeriod(data, afterPeriod) {
 }
 function periodForDate(data, dateStr) {
   return (data.periods || []).find(function (p) { return dateStr >= p.startDate && dateStr <= p.endDate; }) || null;
+}
+// True when at least one employee has DTR rows uploaded for this period.
+function periodHasDtr(data, pid) {
+  const m = (data.dtr || {})[pid];
+  if (!m) return false;
+  return Object.keys(m).some(function (empId) { return Array.isArray(m[empId]) && m[empId].length > 0; });
 }
 
 /* ---------- overtime authorization computation ----------
