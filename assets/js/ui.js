@@ -90,6 +90,27 @@
     if (!state.locationId) return list || [];
     return (list || []).filter(function (p) { return !p.locationId || p.locationId === state.locationId; });
   }
+  function todayISO() { var d = new Date(); function p(n) { return (n < 10 ? '0' : '') + n; } return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  // Periods in chronological order (by coverage start, then pay date).
+  function periodsChrono(list) {
+    return (list || []).slice().sort(function (a, b) {
+      var as = a.startDate || a.payDate || '', bs = b.startDate || b.payDate || '';
+      return as < bs ? -1 : as > bs ? 1 : 0;
+    });
+  }
+  // The period to show by default on load/refresh: the one whose coverage
+  // contains today (the cut-off currently being processed); else the nearest
+  // upcoming period by pay date; else the most recent one.
+  function defaultPeriodId(list) {
+    if (!list || !list.length) return null;
+    var iso = todayISO();
+    var contain = list.filter(function (p) { return p.startDate && p.endDate && p.startDate <= iso && iso <= p.endDate; });
+    if (contain.length) return periodsChrono(contain)[0].id;
+    var upcoming = periodsChrono(list.filter(function (p) { return (p.payDate || p.endDate || '') >= iso; }));
+    if (upcoming.length) return upcoming[0].id;
+    var all = periodsChrono(list);
+    return all[all.length - 1].id;
+  }
 
   var VIEWS = [
     ['dashboard', 'Dashboard', '📊'],
@@ -190,7 +211,7 @@
         stat('Loan Balance', money(loanBal), '📉') +
       '</div>';
 
-    var periods = scopePeriods(S.list('periods'));
+    var periods = periodsChrono(scopePeriods(S.list('periods')));
     var periodRows = periods.length ? periods.map(function (p) {
       return '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.startDate) + ' → ' + esc(p.endDate) +
         '</td><td>' + esc(p.frequency) + '</td><td><span class="badge ' +
@@ -509,13 +530,13 @@
 
   /* ===================== DTR ===================== */
   function viewDTR(v) {
-    var periods = scopePeriods(S.list('periods'));
+    var periods = periodsChrono(scopePeriods(S.list('periods')));
     if (!periods.length) {
       v.innerHTML = card('DTR / Time Records',
         '<p class="muted">Create a payroll period first (under "Run Payroll") to attach a DTR.</p>');
       return;
     }
-    var pid = state.selectedPeriod || periods[0].id;
+    var pid = state.selectedPeriod || defaultPeriodId(periods);
     state.selectedPeriod = pid;
     var period = S.find('periods', pid);
     var dtr = (S.db.dtr[pid]) || {};
@@ -981,8 +1002,8 @@
 
   /* ===================== RUN PAYROLL ===================== */
   function viewPayroll(v) {
-    var periods = scopePeriods(S.list('periods'));
-    var pid = state.selectedPeriod || (periods[0] && periods[0].id);
+    var periods = periodsChrono(scopePeriods(S.list('periods')));
+    var pid = state.selectedPeriod || defaultPeriodId(periods);
     state.selectedPeriod = pid;
 
     var header = card('Payroll Periods',
@@ -1382,12 +1403,12 @@
 
   /* ===================== REPORTS ===================== */
   function viewReports(v) {
-    var periods = scopePeriods(S.list('periods'));
+    var periods = periodsChrono(scopePeriods(S.list('periods')));
     if (!periods.length) {
       v.innerHTML = card('Reports', '<p class="muted">Create a payroll period first.</p>');
       return;
     }
-    var pid = state.selectedPeriod || periods[0].id;
+    var pid = state.selectedPeriod || defaultPeriodId(periods);
     state.selectedPeriod = pid;
     var period = S.find('periods', pid);
     var results = period.status === 'finalized' && S.db.payrolls[pid]
