@@ -729,8 +729,8 @@
       return '<tr data-i="' + i + '">' +
         '<td><input name="date" type="date" value="' + esc(d.date || '') + '">' +
         (d.date ? '<div class="sub">' + weekdayName(d.date) + '</div>' : '') + '</td>' +
-        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '"></td>' +
-        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '"></td>' +
+        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '"></td>' +
+        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '"></td>' +
         '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : (emp.schedBreakMins != null ? emp.schedBreakMins : 60)) + '" style="width:56px"></td>' +
         '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
         '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
