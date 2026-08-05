@@ -304,11 +304,79 @@
           '<p class="muted">Your time records are maintained by your administrator from the biometric device. This is a <b>view-only</b> record — if something looks wrong, please contact your administrator.</p>' +
           (periods.length ? '<label>Payroll period</label><select id="perSel" style="max-width:320px">' + opts + '</select>' +
             '<div id="dtrArea" style="margin-top:14px"></div>'
-            : '<p class="muted">No payroll period to show yet.</p>') + '</div></div>';
+            : '<p class="muted">No payroll period to show yet.</p>') + '</div></div>' +
+          (periods.length ? '<div class="card"><h2>Upload Physical Time Card</h2><div class="in">' +
+            '<p class="muted">Attach a photo or scan of your physical/manual time card for the selected period so your administrator can verify it. Accepted: JPG, PNG or PDF.</p>' +
+            '<input type="file" id="tcFile" accept="image/*,application/pdf" capture="environment">' +
+            '<input id="tcNote" placeholder="Optional note (e.g. week 1)" style="display:block;margin-top:8px;width:100%;max-width:420px">' +
+            '<button class="btn" id="tcUpload" style="margin-top:10px">Upload Time Card</button><span id="tcMsg" class="msg"></span>' +
+            '<div id="tcList" style="margin-top:14px"></div>' +
+            '</div></div>' : '');
         if (!periods.length) return;
         var sel = document.getElementById('perSel');
-        sel.addEventListener('change', function () { loadDtr(sel.value, periods); });
+        sel.addEventListener('change', function () { loadDtr(sel.value, periods); loadTimecards(sel.value); });
+        document.getElementById('tcUpload').addEventListener('click', function () { uploadTimecard(sel.value); });
         loadDtr(sel.value, periods);
+        loadTimecards(sel.value);
+      });
+    }
+    // ---- Physical time card uploads ----
+    function tcCompress(file) {
+      // Images are downscaled to a JPEG to keep uploads small; PDFs pass through.
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onerror = reject;
+        if (file.type === 'application/pdf') { fr.onload = function () { resolve(fr.result); }; fr.readAsDataURL(file); return; }
+        fr.onload = function () {
+          var img = new Image();
+          img.onerror = reject;
+          img.onload = function () {
+            var maxD = 1600, w = img.width, h = img.height;
+            if (w > h && w > maxD) { h = Math.round(h * maxD / w); w = maxD; }
+            else if (h > maxD) { w = Math.round(w * maxD / h); h = maxD; }
+            var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+            cv.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(cv.toDataURL('image/jpeg', 0.75));
+          };
+          img.src = fr.result;
+        };
+        fr.readAsDataURL(file);
+      });
+    }
+    function uploadTimecard(pid) {
+      var m = document.getElementById('tcMsg'), fileEl = document.getElementById('tcFile');
+      var f = fileEl.files[0];
+      if (!f) { m.textContent = '  Choose a file first.'; m.className = 'msg err'; return; }
+      if (f.size > 15 * 1024 * 1024) { m.textContent = '  File too large (max ~15 MB).'; m.className = 'msg err'; return; }
+      var btn = document.getElementById('tcUpload'); btn.disabled = true; m.textContent = '  Uploading…'; m.className = 'msg';
+      tcCompress(f).then(function (dataUrl) {
+        return api('/api/me/timecard', { method: 'POST', body: JSON.stringify({ periodId: pid, dataUrl: dataUrl, note: document.getElementById('tcNote').value }) });
+      }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Upload failed.'); m.className = 'msg err'; return; }
+        m.textContent = '  ✓ Uploaded'; m.className = 'msg ok';
+        fileEl.value = ''; document.getElementById('tcNote').value = '';
+        loadTimecards(pid);
+      }).catch(function () { btn.disabled = false; m.textContent = '  Could not read that file.'; m.className = 'msg err'; });
+    }
+    function loadTimecards(pid) {
+      api('/api/me/timecards?periodId=' + encodeURIComponent(pid)).then(function (r) {
+        var rows = (r.body.timecards || []).map(function (t) {
+          var isPdf = t.mime === 'application/pdf';
+          var thumb = isPdf ? '<span style="font-size:22px">📄</span>' : '<img src="/api/timecard/' + t.id + '" style="width:54px;height:54px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0">';
+          return '<tr><td><a href="/api/timecard/' + t.id + '" target="_blank">' + thumb + '</a></td>' +
+            '<td>' + esc((t.note || '') || (isPdf ? 'PDF' : 'Photo')) + '<div class="muted" style="font-size:11px">' + esc(t.created_at) + '</div></td>' +
+            '<td><button class="btn sm ghost" data-tcdel="' + t.id + '">Remove</button></td></tr>';
+        }).join('');
+        document.getElementById('tcList').innerHTML = rows
+          ? '<table><thead><tr><th>File</th><th>Note</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          : '<p class="muted">No time cards uploaded for this period yet.</p>';
+        document.querySelectorAll('#tcList [data-tcdel]').forEach(function (b) {
+          b.onclick = function () {
+            if (!confirm('Remove this time card?')) return;
+            api('/api/me/timecard/' + b.dataset.tcdel, { method: 'DELETE' }).then(function () { loadTimecards(pid); });
+          };
+        });
       });
     }
     function fmtFlag(d) {

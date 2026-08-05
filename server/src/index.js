@@ -1291,6 +1291,69 @@ app.post('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
   return res.status(403).json({ error: 'Your DTR is view-only. Time records are maintained by your administrator from the biometric device.' });
 });
 
+/* ---- physical time card uploads (employee → admin) ---- */
+const TIMECARD_MIME = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1 };
+function parseDataUrl(s) {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(String(s || ''));
+  if (!m) return null;
+  return { mime: m[1], b64: m[2] };
+}
+// Employee uploads a photo/scan of their physical time card for a period.
+app.post('/api/me/timecard', A.requireAuth, (req, res) => {
+  const { periodId, dataUrl, note } = req.body || {};
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return res.status(400).json({ error: 'Please attach an image or PDF of your time card.' });
+  if (!TIMECARD_MIME[parsed.mime]) return res.status(400).json({ error: 'Only JPG, PNG, WEBP or PDF files are accepted.' });
+  // Guard the size (base64 is ~4/3 of the bytes; ~4MB of image keeps us under the body limit).
+  if (parsed.b64.length > 5.4 * 1024 * 1024) return res.status(400).json({ error: 'That file is too large. Please upload a smaller photo (under ~4 MB).' });
+  const info = db.prepare(
+    'INSERT INTO time_cards (user_id, employee_code, period_id, mime, data, note) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(req.user.id, req.user.employee_code || null, periodId || null, parsed.mime, parsed.b64, String(note || '').slice(0, 300));
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+// The employee's own uploads (metadata only) — optionally filtered to a period.
+app.get('/api/me/timecards', A.requireAuth, (req, res) => {
+  const pid = req.query.periodId;
+  const rows = pid
+    ? db.prepare('SELECT id, period_id, mime, note, created_at FROM time_cards WHERE user_id = ? AND period_id = ? ORDER BY created_at DESC').all(req.user.id, pid)
+    : db.prepare('SELECT id, period_id, mime, note, created_at FROM time_cards WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
+  res.json({ timecards: rows });
+});
+// Employee removes one of their own uploads.
+app.delete('/api/me/timecard/:id', A.requireAuth, (req, res) => {
+  const info = db.prepare('DELETE FROM time_cards WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Not found.' });
+  res.json({ ok: true });
+});
+// Admin/supervisor list of uploaded time cards for a period (location-scoped).
+app.get('/api/admin/timecards', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const pid = req.query.periodId;
+  let rows = (pid
+    ? db.prepare(`SELECT tc.id, tc.employee_code, tc.period_id, tc.mime, tc.note, tc.created_at, u.full_name
+                  FROM time_cards tc JOIN users u ON u.id = tc.user_id WHERE tc.period_id = ? ORDER BY tc.created_at DESC`).all(pid)
+    : db.prepare(`SELECT tc.id, tc.employee_code, tc.period_id, tc.mime, tc.note, tc.created_at, u.full_name
+                  FROM time_cards tc JOIN users u ON u.id = tc.user_id ORDER BY tc.created_at DESC`).all());
+  rows = scopeRequestRows(req, rows); // narrow to the reviewer's branch when scoped
+  res.json({ timecards: rows });
+});
+// Stream one time card's image. Owner or any admin-app role may view; scoped
+// admins only within their branch.
+app.get('/api/timecard/:id', A.requireAuth, (req, res) => {
+  const tc = db.prepare('SELECT * FROM time_cards WHERE id = ?').get(req.params.id);
+  if (!tc) return res.status(404).json({ error: 'Not found.' });
+  const isOwner = tc.user_id === req.user.id;
+  const adminRoles = ['superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'];
+  const isAdmin = adminRoles.indexOf(req.user.role) >= 0;
+  if (!isOwner && !isAdmin) return res.status(403).json({ error: 'Not allowed.' });
+  if (!isOwner && isAdmin && req.user.location_id) {
+    const loc = {}; (getCompanyData().employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+    if (loc[tc.employee_code] !== req.user.location_id) return res.status(403).json({ error: 'Not allowed.' });
+  }
+  res.set('Content-Type', tc.mime);
+  res.set('Content-Disposition', 'inline; filename="timecard-' + tc.id + '"');
+  res.send(Buffer.from(tc.data, 'base64'));
+});
+
 // Own payslips (finalized payroll results).
 app.get('/api/me/payslips', A.requireAuth, (req, res) => {
   const data = getCompanyData();
