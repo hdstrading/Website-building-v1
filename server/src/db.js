@@ -127,6 +127,9 @@ try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAUL
 // Per-location manager scoping: when set, the user only sees/edits that location.
 try { db.exec("ALTER TABLE users ADD COLUMN location_id TEXT"); } catch (e) { /* column already present */ }
 
+// Force a password change on next login (set when an admin issues a temp password).
+try { db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
+
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.
 db.exec(`

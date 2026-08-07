@@ -58,6 +58,15 @@
         </div>
       </form>
 
+      <form id="changePwForm" style="display:none">
+        <div class="section-title">Create your new password</div>
+        <p style="font-size:13px;color:#555;margin:0 0 10px">Your administrator issued a temporary password. Set your own password to continue.</p>
+        <label>Temporary password</label><input name="currentPassword" type="password" autocomplete="current-password" required>
+        <label>New password</label><input name="newPassword" type="password" minlength="6" autocomplete="new-password" required>
+        <label>Confirm new password</label><input name="confirmPassword" type="password" minlength="6" autocomplete="new-password" required>
+        <button class="btn" type="submit">Save New Password</button>
+      </form>
+
       <form id="reset2faForm" style="display:none">
         <div class="section-title">Reset password with your authenticator</div>
         <p style="font-size:13px;color:#555;margin:0 0 10px">Use this if you set up an authenticator app (Google Authenticator, Authy, etc.). Enter the 6-digit code it shows for “HDS Trading Payroll”.</p>
@@ -136,8 +145,24 @@
     // Signed out due to inactivity?
     if (/[?&]timeout=1/.test(location.search)) showMsg('You were signed out after 5 minutes of inactivity. Please sign in again.');
 
-    // Already signed in? go straight in.
+    // Forced password change (temporary password issued by an admin).
+    var pendingRole = null;
+    function showChangePw(role, tempPw) {
+      pendingRole = role;
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('registerForm').style.display = 'none';
+      document.getElementById('reset2faForm').style.display = 'none';
+      document.getElementById('changePwForm').style.display = '';
+      document.querySelector('.tabs').style.display = 'none';
+      clearMsg();
+      var cur = document.querySelector('#changePwForm [name=currentPassword]');
+      if (tempPw) { cur.value = tempPw; document.querySelector('#changePwForm [name=newPassword]').focus(); }
+      else cur.focus();
+    }
+
+    // Already signed in? Go straight in — unless a password change is required.
     fetch('/api/auth/me').then(function (r) { return r.json(); }).then(function (j) {
+      if (j.user && j.user.mustChangePassword) return showChangePw(j.user.role, '');
       if (j.user) redirectByRole(j.user.role);
     });
 
@@ -189,7 +214,23 @@
         .then(function (res) {
           btn.disabled = false;
           if (!res.ok) return showMsg(res.j.error || 'Sign in failed.');
+          if (res.j.mustChangePassword) return showChangePw(res.j.user.role, collect(e.target).password);
           redirectByRole(res.j.user.role);
+        }).catch(function () { btn.disabled = false; showMsg('Network error.'); });
+    });
+
+    document.getElementById('changePwForm').addEventListener('submit', function (e) {
+      e.preventDefault(); clearMsg();
+      var d = collect(e.target);
+      if (d.newPassword !== d.confirmPassword) { showMsg('The new passwords do not match.'); return; }
+      var btn = e.target.querySelector('button'); btn.disabled = true;
+      fetch('/api/me/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: d.currentPassword, newPassword: d.newPassword }) })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.ok) return showMsg(res.j.error || 'Could not set your new password.');
+          redirectByRole(pendingRole || 'employee');
         }).catch(function () { btn.disabled = false; showMsg('Network error.'); });
     });
 

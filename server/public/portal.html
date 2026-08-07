@@ -186,6 +186,7 @@
     // ---- bootstrap ----
     api('/api/auth/me').then(function (me) {
       if (!me.body.user) { location.href = '/'; return; }
+      if (me.body.user.mustChangePassword) { location.href = '/'; return; } // set a new password first
       var role = me.body.user.role;
       if (role !== 'employee' && role !== 'supervisor') { location.href = '/app'; return; }
       state.isSupervisor = role === 'supervisor';
