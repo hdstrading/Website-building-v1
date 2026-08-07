@@ -332,6 +332,7 @@
     api('/api/auth/me').then(function (me) {
       var user = me.body.user;
       if (!user) { location.href = '/'; return; }
+      if (user.mustChangePassword) { location.href = '/'; return; } // set a new password first
       if (ADMIN.indexOf(user.role) < 0) { location.href = '/portal'; return; }
       return api('/api/company').then(function (c) {
         if (!c.ok) { location.href = '/'; return; }

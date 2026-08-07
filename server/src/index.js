@@ -17,6 +17,20 @@ app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 app.use(A.authenticate);
 
+// A user issued a temporary password must set their own before doing anything
+// else: block all API calls (except checking who they are, logging out, and the
+// change-password call itself) until they do.
+app.use(function (req, res, next) {
+  if (req.user && req.user.must_change_password && req.path.indexOf('/api/') === 0) {
+    const allowed =
+      (req.method === 'GET' && req.path === '/api/auth/me') ||
+      (req.method === 'POST' && req.path === '/api/auth/logout') ||
+      (req.method === 'POST' && req.path === '/api/me/change-password');
+    if (!allowed) return res.status(403).json({ error: 'Please set a new password before continuing.', code: 'MUST_CHANGE_PASSWORD' });
+  }
+  next();
+});
+
 // Public base URL for links in emails (env override, else derive from request).
 function baseUrl(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/$/, '');
@@ -503,11 +517,24 @@ app.post('/api/auth/login', (req, res) => {
   if (user.status === 'pending') return res.status(403).json({ error: 'Your account is awaiting administrator approval.' });
   if (user.status === 'disabled') return res.status(403).json({ error: 'Your account has been disabled.' });
   A.issueToken(res, user);
-  res.json({ user: A.publicUser(user) });
+  res.json({ user: A.publicUser(user), mustChangePassword: !!user.must_change_password });
 });
 
 app.post('/api/auth/logout', (req, res) => { A.clearToken(res); res.json({ ok: true }); });
 app.get('/api/auth/me', (req, res) => res.json({ user: A.publicUser(req.user) }));
+
+// Set a new password (voluntary change, or the forced change after an admin
+// issued a temporary one). Verifies the current password and clears the flag.
+app.post('/api/me/change-password', A.requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!newPassword || String(newPassword).length < 6) return res.status(400).json({ error: 'Your new password must be at least 6 characters.' });
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!u || !A.verifyPassword(currentPassword || '', u.password_hash)) return res.status(400).json({ error: 'Your current (temporary) password is incorrect.' });
+  if (A.verifyPassword(newPassword, u.password_hash)) return res.status(400).json({ error: 'Please choose a new password that is different from the temporary one.' });
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?').run(A.hashPassword(newPassword), u.id);
+  audit({ user: { id: u.id, email: u.email, role: u.role } }, 'update', 'user', 'Set a new password' + (u.must_change_password ? ' (required after admin reset)' : ''));
+  res.json({ ok: true });
+});
 
 // Forgot password: emails a reset link (only when SMTP is configured).
 app.post('/api/auth/forgot', async (req, res) => {
@@ -1030,9 +1057,10 @@ app.post('/api/admin/users/:id/password', adminMgmt, requireUnscoped, (req, res)
   let generated = false;
   if (!pw) { pw = Math.random().toString(36).slice(2, 10); generated = true; }
   if (String(pw).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(A.hashPassword(pw), user.id);
-  audit(req, 'update', 'user', 'Reset password for ' + user.email);
-  res.json({ ok: true, password: generated ? pw : undefined });
+  // Admin-issued passwords are temporary: the user must set their own on next login.
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?').run(A.hashPassword(pw), user.id);
+  audit(req, 'update', 'user', 'Issued a temporary password for ' + user.email + ' (must change on next login)');
+  res.json({ ok: true, password: generated ? pw : undefined, temporary: true });
 });
 
 // Superadmin: system change history (who / what / when). Views are not logged.
