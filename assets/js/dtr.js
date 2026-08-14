@@ -57,6 +57,29 @@
     return isNaN(d.getTime()) ? null : d.getDay();
   }
 
+  // Resolve the explicit per-calendar-month schedule for a date, when configured.
+  // `monthSchedule` looks like { "YYYY-MM": { "1": {in,out[,brk]}, "2": {...} } }.
+  // Precedence rule (per the "grid is source of truth" design):
+  //   • month not configured  -> returns undefined  (caller falls back to the
+  //                              weekday/base schedule)
+  //   • date has an entry      -> returns { in, out, brk } for that shift
+  //   • date blank in a set-up month -> returns { off: true }  (a rest day)
+  function monthOverride(monthSchedule, dateStr) {
+    if (!monthSchedule || dateStr == null) return undefined;
+    var s = String(dateStr);
+    if (s.length < 10) return undefined;
+    var ym = s.slice(0, 7);
+    var month = monthSchedule[ym];
+    if (!month) return undefined;                 // this month isn't configured
+    var dnum = parseInt(s.slice(8, 10), 10);
+    var e = month[dnum] || month[String(dnum)];
+    var has = function (x) { return x != null && String(x).trim() !== ''; };
+    if (e && (has(e.in) || has(e.out))) {
+      return { in: e.in || '', out: e.out || '', brk: e.brk };
+    }
+    return { off: true };                         // configured month, blank day = rest
+  }
+
   // Minutes worked that fall inside the night-differential window (22:00–06:00).
   function nightMinutes(start, end) {
     if (start == null || end == null) return 0;
@@ -122,13 +145,17 @@
     };
 
     var hasVal = function (x) { return x != null && String(x).trim() !== ''; };
-    // Per-weekday recurring schedule (from the 201 record), when supplied. The
-    // matching weekday's entry sets that day's shift in/out, break and day-off
-    // status; any blank field falls back to the employee's base schedule.
-    var ws = null;
-    if (opts.weekSchedule && day.date != null) {
-      var wd = weekdayOf(day.date);
-      if (wd != null) ws = opts.weekSchedule[wd] || opts.weekSchedule[String(wd)] || null;
+    // Effective per-day schedule override. An explicit per-calendar-month schedule
+    // (opts.monthSchedule) takes precedence for any month it configures — the grid
+    // is the source of truth, so a blank day there is a rest day. When the date's
+    // month is not configured, fall back to the per-weekday recurring schedule.
+    var ws = monthOverride(opts.monthSchedule, day.date);
+    if (ws === undefined) {
+      ws = null;
+      if (opts.weekSchedule && day.date != null) {
+        var wd = weekdayOf(day.date);
+        if (wd != null) ws = opts.weekSchedule[wd] || opts.weekSchedule[String(wd)] || null;
+      }
     }
 
     // Resolve effective day type (rest-day upgrades). A weekday marked "off" in
@@ -506,8 +533,15 @@
     emp = emp || {};
     var base = { in: emp.schedTimeIn || '', out: emp.schedTimeOut || '',
       brk: emp.schedBreakMins != null ? emp.schedBreakMins : 60, off: false };
-    var wd = weekdayOf(dateStr);
-    var ws = (wd != null && emp.weekSchedule) ? (emp.weekSchedule[wd] || emp.weekSchedule[String(wd)]) : null;
+    // Explicit monthly schedule wins for any month it configures (blank = rest day).
+    var mo = monthOverride(emp.monthSchedule, dateStr);
+    var ws;
+    if (mo !== undefined) {
+      ws = mo;
+    } else {
+      var wd = weekdayOf(dateStr);
+      ws = (wd != null && emp.weekSchedule) ? (emp.weekSchedule[wd] || emp.weekSchedule[String(wd)]) : null;
+    }
     if (!ws) return base;
     var has = function (x) { return x != null && String(x).trim() !== ''; };
     return {
