@@ -55,7 +55,7 @@
     ov.className = 'acc-overlay';
     var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a>' +
       (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
@@ -74,6 +74,7 @@
       if (tab === 'overtime') return api('/api/admin/overtime-requests').then(function (r) { renderOvertime(r.body.requests || []); });
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
       if (tab === 'pcr') return api('/api/admin/profile-requests').then(function (r) { renderPcr(r.body.requests || []); });
+      if (tab === 'documents') return renderDocuments();
       if (tab === 'history') return api('/api/admin/audit-log').then(function (r) { renderHistory((r.body || {}).entries || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
@@ -320,6 +321,92 @@
         var ok = tr.querySelector('.pcr-ok'), no = tr.querySelector('.pcr-no');
         if (ok) ok.onclick = function () { decide('approved'); };
         if (no) no.onclick = function () { decide('rejected'); };
+      });
+    }
+
+    // ---- Documents: issue NTE / Notice of Decision / memo, and view employee docs ----
+    var ADMIN_ISSUE_CATS = [['nte', 'Notice to Explain (NTE)'], ['nod', 'Notice of Decision'], ['memo', 'Memo'], ['other', 'Other Document']];
+    var docFilterCode = '';
+    function empList() {
+      return ((((window.__COMPANY__ || {}).data || {}).employees) || []).slice().sort(function (a, b) {
+        return String(a.lastName || '').localeCompare(String(b.lastName || ''));
+      });
+    }
+    function empName(e) { return ((e.lastName || '') + ', ' + (e.firstName || '')).replace(/^, |, $/g, '') || (e.code || '?'); }
+    function readFileDataUrl(file) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = function () { reject(new Error('read')); };
+        fr.readAsDataURL(file);
+      });
+    }
+    function renderDocuments() {
+      var emps = empList();
+      var empOpts = emps.map(function (e) { return '<option value="' + esc(e.code) + '">' + esc(empName(e)) + (e.code ? ' (' + esc(e.code) + ')' : '') + '</option>'; }).join('');
+      body.innerHTML =
+        '<div class="acc-card"><b>Issue a document to an employee</b>' +
+        '<div class="acc-muted" style="margin:4px 0 8px">Send an NTE, Notice of Decision or memo. The employee is notified and can view it in their portal Documents tab.</div>' +
+        '<div class="acc-row"><select id="doc-emp"><option value="">— Choose employee —</option>' + empOpts + '</select>' +
+        '<select id="doc-cat">' + ADMIN_ISSUE_CATS.map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div class="acc-row"><input id="doc-title" placeholder="Title (e.g. NTE — Tardiness Aug 2026)" style="flex:1"></div>' +
+        '<div class="acc-row"><input id="doc-note" placeholder="Note (optional)" style="flex:1"></div>' +
+        '<div class="acc-row"><input type="file" id="doc-file" accept="image/*,application/pdf">' +
+        '<button class="acc-btn" id="doc-issue">Issue Document</button><span id="doc-msg" class="acc-muted"></span></div></div>' +
+        '<div class="acc-row" style="margin:10px 0"><b style="align-self:center">View documents:</b>' +
+        '<select id="doc-filter"><option value="">All (recent)</option>' + empOpts + '</select></div>' +
+        '<div id="doc-list">Loading…</div>';
+      document.getElementById('doc-filter').value = docFilterCode;
+      document.getElementById('doc-filter').onchange = function () { docFilterCode = this.value; loadAdminDocs(); };
+      document.getElementById('doc-issue').onclick = issueDocument;
+      loadAdminDocs();
+    }
+    function issueDocument() {
+      var msg = document.getElementById('doc-msg');
+      var code = document.getElementById('doc-emp').value;
+      var cat = document.getElementById('doc-cat').value;
+      var title = document.getElementById('doc-title').value;
+      var note = document.getElementById('doc-note').value;
+      var file = document.getElementById('doc-file').files[0];
+      if (!code) { msg.textContent = ' Choose an employee.'; return; }
+      if (!file) { msg.textContent = ' Attach a file.'; return; }
+      if (file.size > 5 * 1024 * 1024) { msg.textContent = ' File is too large (max ~5 MB).'; return; }
+      var btn = document.getElementById('doc-issue'); btn.disabled = true; msg.textContent = ' Uploading…';
+      readFileDataUrl(file).then(function (dataUrl) {
+        return api('/api/admin/documents', { method: 'POST', body: JSON.stringify({ employeeCode: code, category: cat, title: title, note: note, dataUrl: dataUrl }) });
+      }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { msg.textContent = ' ' + (r.body.error || 'Failed.'); return; }
+        msg.textContent = ' ✓ Issued';
+        document.getElementById('doc-title').value = ''; document.getElementById('doc-note').value = ''; document.getElementById('doc-file').value = '';
+        docFilterCode = code; loadAdminDocs();
+        var f = document.getElementById('doc-filter'); if (f) f.value = code;
+      }).catch(function () { btn.disabled = false; msg.textContent = ' Could not read that file.'; });
+    }
+    function loadAdminDocs() {
+      var el = document.getElementById('doc-list'); if (!el) return;
+      el.innerHTML = 'Loading…';
+      api('/api/admin/documents' + (docFilterCode ? '?employeeCode=' + encodeURIComponent(docFilterCode) : '')).then(function (r) {
+        var list = (r.body && r.body.documents) || [];
+        if (!list.length) { el.innerHTML = '<p class="acc-muted">No documents.</p>'; return; }
+        el.innerHTML = '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Type</th><th>Title</th><th>Source</th><th>Date</th><th></th></tr></thead><tbody>' +
+          list.map(function (d) {
+            var src = d.direction === 'admin' ? 'HR / Admin' : 'Employee';
+            return '<tr data-did="' + d.id + '"><td>' + esc(d.full_name || d.employee_code || '—') +
+              (d.employee_code ? '<div class="acc-muted">' + esc(d.employee_code) + '</div>' : '') + '</td>' +
+              '<td>' + esc(d.categoryLabel) + '</td><td>' + esc(d.title || '—') +
+              (d.leave_request_id ? ' <span class="acc-badge approved">leave</span>' : '') + '</td>' +
+              '<td>' + src + '</td><td>' + esc((d.created_at || '').slice(0, 10)) + '</td>' +
+              '<td class="acc-actions"><a class="acc-btn ghost" href="/api/document/' + d.id + '" target="_blank">View</a>' +
+              (isSuper ? '<button class="acc-btn ghost doc-del">Delete</button>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        el.querySelectorAll('tr[data-did]').forEach(function (tr) {
+          var del = tr.querySelector('.doc-del');
+          if (del) del.onclick = function () {
+            if (!confirm('Delete this document permanently?')) return;
+            api('/api/admin/documents/' + tr.dataset.did, { method: 'DELETE' }).then(loadAdminDocs);
+          };
+        });
       });
     }
 

@@ -157,6 +157,30 @@ CREATE TABLE IF NOT EXISTS profile_change_requests (
 CREATE INDEX IF NOT EXISTS idx_pcr_user ON profile_change_requests(user_id);
 `);
 
+// Documents attached to an employee: uploaded BY the employee (medical
+// certificate, emergency-leave proof, other) or issued TO them by HR/admin
+// (Notice to Explain, Notice of Decision, memo). Stored as base64.
+db.exec(`
+CREATE TABLE IF NOT EXISTS documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subject_user_id INTEGER,
+  subject_employee_code TEXT,
+  direction TEXT NOT NULL,          -- 'employee' (uploaded by the employee) | 'admin' (issued by HR/admin)
+  category TEXT NOT NULL,           -- med_cert | el_proof | other | nte | nod | memo
+  title TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+  data TEXT NOT NULL,
+  leave_request_id INTEGER,
+  uploaded_by INTEGER,
+  uploader_role TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_docs_subject ON documents(subject_user_id);
+CREATE INDEX IF NOT EXISTS idx_docs_code ON documents(subject_employee_code);
+CREATE INDEX IF NOT EXISTS idx_docs_leave ON documents(leave_request_id);
+`);
+
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.
 db.exec(`
