@@ -271,6 +271,13 @@
       var body = !emp
         ? '<p class="muted">Your account is not yet linked to an employee record. Some details you entered at sign-up are shown below; an administrator will finalize your 201 file.</p>'
         : '';
+      var pc = state.profile.pendingProfileChange;
+      if (pc && pc.fields) {
+        var LBL = { bankName: 'Bank', bankAccountName: 'Account Name', bankAccountNumber: 'Account No.', sssNo: 'SSS No.', philhealthNo: 'PhilHealth No.', pagibigNo: 'Pag-IBIG No.', tin: 'TIN' };
+        body += '<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:13px">' +
+          '⏳ <b>Pending admin approval:</b> ' + Object.keys(pc.fields).map(function (k) { return esc((LBL[k] || k) + ' → ' + pc.fields[k]); }).join(', ') +
+          '<div class="muted" style="font-size:11px">Your bank / government-ID change is awaiting approval. The values above will show once approved.</div></div>';
+      }
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>My 201 File <button class="btn sm" id="edit201" style="float:right">Edit My Details</button></h2><div class="in">' + body +
         '<div class="grid2"><table>' +
@@ -295,8 +302,7 @@
       }
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>Edit My Details</h2><div class="in">' +
-        '<p class="muted">You can update your contact details, bank details and government IDs. ' +
-        'Pay, position and schedule are maintained by your administrator.</p>' +
+        '<p class="muted">Contact details are saved right away. <b>Bank details and government IDs require admin approval</b> — they take effect once approved. Pay, position and schedule are maintained by your administrator.</p>' +
         '<form id="p201Form">' +
         '<div class="section-title" style="font-weight:700;color:#17408b;margin:6px 0">Contact Details</div>' +
         '<div class="grid2">' +
@@ -335,8 +341,9 @@
         api('/api/me/201', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
           btn.disabled = false;
           if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Could not save.'); m.className = 'msg err'; return; }
-          // Refresh the cached profile, then show the updated 201.
-          api('/api/me/profile').then(function (p) { state.profile = p.body; viewProfile(); });
+          if (r.body.pending) { m.textContent = '  ✓ Saved. Bank / government-ID changes were sent for admin approval.'; m.className = 'msg ok'; }
+          // Refresh the cached profile, then show the updated 201 (with any pending banner).
+          api('/api/me/profile').then(function (p) { state.profile = p.body; setTimeout(viewProfile, r.body.pending ? 1200 : 0); });
         }).catch(function () { btn.disabled = false; m.textContent = '  Network error.'; m.className = 'msg err'; });
       });
     }
