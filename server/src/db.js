@@ -130,6 +130,17 @@ try { db.exec("ALTER TABLE users ADD COLUMN location_id TEXT"); } catch (e) { /*
 // Force a password change on next login (set when an admin issues a temp password).
 try { db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
 
+// Employee profile photo (latest self picture). One per user, stored as base64.
+db.exec(`
+CREATE TABLE IF NOT EXISTS profile_photos (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  mime TEXT NOT NULL DEFAULT 'image/jpeg',
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+`);
+
 // Employee requests to change sensitive 201 fields (bank / government IDs) that
 // require admin approval before they are applied to the 201 record.
 db.exec(`

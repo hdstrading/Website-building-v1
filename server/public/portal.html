@@ -278,8 +278,22 @@
           '⏳ <b>Pending admin approval:</b> ' + Object.keys(pc.fields).map(function (k) { return esc((LBL[k] || k) + ' → ' + pc.fields[k]); }).join(', ') +
           '<div class="muted" style="font-size:11px">Your bank / government-ID change is awaiting approval. The values above will show once approved.</div></div>';
       }
+      var pcb = Date.now();
+      var photoBlock =
+        '<div style="display:flex;gap:16px;align-items:center;margin-bottom:14px">' +
+        '<div style="width:96px;height:96px;border-radius:50%;overflow:hidden;border:2px solid #e2e8f0;background:#f1f5f9;flex:none;position:relative">' +
+        '<img id="myPhoto" src="/api/me/photo?t=' + pcb + '" style="width:100%;height:100%;object-fit:cover" ' +
+        'onload="this.style.display=\'block\';document.getElementById(\'photoInit\').style.display=\'none\'" ' +
+        'onerror="this.style.display=\'none\'">' +
+        '<div id="photoInit" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:30px;color:#94a3b8">👤</div>' +
+        '</div>' +
+        '<div><input type="file" id="photoFile" accept="image/*" capture="user" style="display:none">' +
+        '<button class="btn sm" id="photoBtn">Upload / Change Photo</button> ' +
+        '<button class="btn sm ghost" id="photoDel">Remove</button>' +
+        '<div class="muted" style="font-size:11px;margin-top:4px">A clear, recent headshot (JPG/PNG).</div>' +
+        '<span id="photoMsg" class="msg"></span></div></div>';
       document.getElementById('view').innerHTML =
-        '<div class="card"><h2>My 201 File <button class="btn sm" id="edit201" style="float:right">Edit My Details</button></h2><div class="in">' + body +
+        '<div class="card"><h2>My 201 File <button class="btn sm" id="edit201" style="float:right">Edit My Details</button></h2><div class="in">' + body + photoBlock +
         '<div class="grid2"><table>' +
         row('Name', ((src.lastName || '') + ', ' + (src.firstName || '') + ' ' + (src.middleName || '')).trim()) +
         row('Position', src.position) + row('Department', src.department) +
@@ -293,6 +307,26 @@
         row('Bank', src.bankName) + row('Account Name', src.bankAccountName) + row('Account No.', src.bankAccountNumber) +
         '</table></div></div></div>';
       document.getElementById('edit201').addEventListener('click', editProfile);
+      var pBtn = document.getElementById('photoBtn'), pFile = document.getElementById('photoFile'), pMsg = document.getElementById('photoMsg');
+      pBtn.addEventListener('click', function () { pFile.click(); });
+      pFile.addEventListener('change', function () {
+        var f = pFile.files[0]; if (!f) return;
+        pMsg.textContent = '  Uploading…'; pMsg.className = 'msg';
+        tcCompress(f).then(function (dataUrl) {
+          return api('/api/me/photo', { method: 'POST', body: JSON.stringify({ dataUrl: dataUrl }) });
+        }).then(function (r) {
+          if (!r.ok) { pMsg.textContent = '  ' + (r.body.error || 'Upload failed.'); pMsg.className = 'msg err'; return; }
+          pMsg.textContent = ''; document.getElementById('myPhoto').src = '/api/me/photo?t=' + Date.now();
+          document.getElementById('myPhoto').style.display = 'block';
+        }).catch(function () { pMsg.textContent = '  Could not read that image.'; pMsg.className = 'msg err'; });
+      });
+      document.getElementById('photoDel').addEventListener('click', function () {
+        if (!confirm('Remove your profile photo?')) return;
+        api('/api/me/photo', { method: 'DELETE' }).then(function () {
+          var img = document.getElementById('myPhoto'); img.style.display = 'none';
+          document.getElementById('photoInit').style.display = 'flex';
+        });
+      });
     }
     function editProfile() {
       var src = state.profile.employee || state.profile.profile || {};
