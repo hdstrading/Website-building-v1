@@ -55,7 +55,7 @@
     ov.className = 'acc-overlay';
     var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a>' +
       (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
@@ -73,6 +73,7 @@
       if (tab === 'leave') return api('/api/admin/leave-requests').then(function (r) { renderLeave(r.body.requests || []); });
       if (tab === 'overtime') return api('/api/admin/overtime-requests').then(function (r) { renderOvertime(r.body.requests || []); });
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
+      if (tab === 'pcr') return api('/api/admin/profile-requests').then(function (r) { renderPcr(r.body.requests || []); });
       if (tab === 'history') return api('/api/admin/audit-log').then(function (r) { renderHistory((r.body || {}).entries || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
@@ -291,6 +292,34 @@
         if (no) no.onclick = function () {
           api('/api/admin/loan-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: 'rejected' }) }).then(function () { renderTab('loans'); });
         };
+      });
+    }
+
+    function renderPcr(reqs) {
+      if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No bank / government-ID change requests.</p>'; return; }
+      body.innerHTML = '<p class="acc-muted">Employees’ requested changes to bank details and government IDs. Approving applies them to the 201 record.</p>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Requested changes</th><th>Status</th><th></th></tr></thead><tbody>' +
+        reqs.map(function (x) {
+          var changes = (x.changes || []).map(function (c) {
+            return '<div><b>' + esc(c.label) + ':</b> <span class="acc-muted">' + esc(c.from || '—') + '</span> → ' + esc(c.to || '—') + '</div>';
+          }).join('');
+          return '<tr data-pid="' + x.id + '"><td>' + esc(x.full_name || x.email) + (x.employee_code ? '<div class="acc-muted">' + esc(x.employee_code) + '</div>' : '') + '</td>' +
+            '<td>' + changes + '</td>' +
+            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
+            '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn pcr-ok">Approve</button><button class="acc-btn ghost pcr-no">Reject</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      body.querySelectorAll('tr[data-pid]').forEach(function (tr) {
+        var pid = tr.dataset.pid;
+        function decide(d) {
+          api('/api/admin/profile-requests/' + pid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function (r) {
+            if (!r.ok) { alert(r.body.error || 'Failed'); return; }
+            if (d === 'approved') refreshCompany(); // 201 record changed server-side
+            renderTab('pcr');
+          });
+        }
+        var ok = tr.querySelector('.pcr-ok'), no = tr.querySelector('.pcr-no');
+        if (ok) ok.onclick = function () { decide('approved'); };
+        if (no) no.onclick = function () { decide('rejected'); };
       });
     }
 

@@ -130,6 +130,22 @@ try { db.exec("ALTER TABLE users ADD COLUMN location_id TEXT"); } catch (e) { /*
 // Force a password change on next login (set when an admin issues a temp password).
 try { db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
 
+// Employee requests to change sensitive 201 fields (bank / government IDs) that
+// require admin approval before they are applied to the 201 record.
+db.exec(`
+CREATE TABLE IF NOT EXISTS profile_change_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  fields_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'pending',
+  reviewed_by INTEGER,
+  reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pcr_user ON profile_change_requests(user_id);
+`);
+
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.
 db.exec(`

@@ -906,6 +906,54 @@ app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
   res.json({ ok: true, loanId: loanId, companyVersion: version });
 });
 
+/* ---- 201 change requests (bank / government IDs — admin review) ---- */
+const canDecide201 = A.requireRole('superadmin', 'admin_payroll');
+const PCR_LABELS = { bankName: 'Bank', bankAccountName: 'Account Name', bankAccountNumber: 'Account No.',
+  sssNo: 'SSS No.', philhealthNo: 'PhilHealth No.', pagibigNo: 'Pag-IBIG No.', tin: 'TIN' };
+app.get('/api/admin/profile-requests', canDecide201, (req, res) => {
+  const data = getCompanyData();
+  let rows = db.prepare(
+    `SELECT pcr.*, u.full_name, u.email FROM profile_change_requests pcr JOIN users u ON u.id = pcr.user_id
+     ORDER BY (pcr.status = 'pending') DESC, pcr.created_at DESC`
+  ).all();
+  rows = scopeRequestRows(req, rows); // narrow to the reviewer's branch when scoped
+  res.json({ requests: rows.map(function (r) {
+    const emp = findEmpByCode(data, r.employee_code) || {};
+    const fields = JSON.parse(r.fields_json || '{}');
+    const changes = Object.keys(fields).map(function (f) {
+      return { field: f, label: PCR_LABELS[f] || f, from: emp[f] || '', to: fields[f] };
+    });
+    return { id: r.id, employee_code: r.employee_code, full_name: r.full_name, email: r.email,
+      status: r.status, created_at: r.created_at, changes: changes };
+  }) });
+});
+app.post('/api/admin/profile-requests/:id', canDecide201, (req, res) => {
+  const { decision } = req.body || {};
+  if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
+  const row = db.prepare('SELECT * FROM profile_change_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Request not found.' });
+  if (row.status !== 'pending') return res.status(400).json({ error: 'This request has already been decided.' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, row.employee_code);
+  // A location-scoped reviewer may only decide their own branch's requests.
+  if (req.user.location_id && (!emp || (emp.locationId || null) !== req.user.location_id)) {
+    return res.status(403).json({ error: 'Not allowed for this location.' });
+  }
+  const fields = JSON.parse(row.fields_json || '{}');
+  if (decision === 'approved') {
+    if (!emp) return res.status(400).json({ error: 'No 201 record is linked to this employee.' });
+    Object.keys(fields).forEach(function (f) { if (APPROVAL_201.indexOf(f) >= 0) emp[f] = fields[f]; });
+    try { saveCompanyData(data); }
+    catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+  }
+  db.prepare("UPDATE profile_change_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?")
+    .run(decision, req.user.id, row.id);
+  notify(row.user_id, 'profile', 'Bank / government-ID change ' + decision,
+    'Your requested change to ' + Object.keys(fields).map(function (f) { return PCR_LABELS[f] || f; }).join(', ') + ' was ' + decision + '.');
+  audit(req, decision, 'profile change', (row.employee_code || ('user ' + row.user_id)) + ' bank/gov-ID change ' + decision + ' (' + Object.keys(fields).join(', ') + ')');
+  res.json({ ok: true });
+});
+
 /* ================= EXTERNAL INTEGRATIONS =================
  * Machine-to-machine endpoints for sibling apps (e.g. the inventory system).
  * Authenticated with a shared secret (INTEGRATION_API_KEY) rather than a user
@@ -1144,48 +1192,67 @@ app.get('/api/me/profile', A.requireAuth, (req, res) => {
   const data = getCompanyData();
   const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
   const loans = emp ? (data.loans || []).filter(function (l) { return l.employeeId === emp.id; }) : [];
+  const pcr = db.prepare("SELECT fields_json, created_at FROM profile_change_requests WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1").get(req.user.id);
   res.json({
     user: A.publicUser(req.user),
     profile: JSON.parse(req.user.profile_json || '{}'),
     employee: emp || null,
     loans: loans,
     cashAdvance: emp ? cashAdvanceInfo(data, emp, req.user.id) : null,
+    pendingProfileChange: pcr ? { fields: JSON.parse(pcr.fields_json || '{}'), at: pcr.created_at } : null,
     company: data.meta.company
   });
 });
 
-// Fields an employee may edit on their OWN 201 — personal details only. Anything
-// that affects pay (salary, employment type/status, schedule, code, location,
-// deductions, leave credits, active) is intentionally NOT in this list.
-const SELF_EDITABLE_201 = ['contactNumber', 'email', 'address', 'civilStatus',
-  'emergencyName', 'emergencyRelation', 'emergencyContact',
-  'bankName', 'bankAccountName', 'bankAccountNumber',
-  'sssNo', 'philhealthNo', 'pagibigNo', 'tin'];
-function applySelf201(target, body) {
-  SELF_EDITABLE_201.forEach(function (f) {
-    if (f in body) target[f] = (typeof body[f] === 'string') ? body[f].trim() : body[f];
-  });
-}
-// Employee updates their own 201 (contact / bank / government IDs only).
+// Fields an employee may edit on their OWN 201. Contact details apply instantly;
+// bank details and government IDs affect payouts/remittances, so those changes
+// go through admin approval. Nothing that affects pay (salary, employment
+// type/status, schedule, code, location, deductions, leave credits, active) is
+// self-editable at all.
+const CONTACT_201 = ['contactNumber', 'email', 'address', 'civilStatus',
+  'emergencyName', 'emergencyRelation', 'emergencyContact'];
+const APPROVAL_201 = ['bankName', 'bankAccountName', 'bankAccountNumber', 'sssNo', 'philhealthNo', 'pagibigNo', 'tin'];
+function trimVal(v) { return (typeof v === 'string') ? v.trim() : v; }
+// Employee updates their own 201: contact details are saved immediately; bank /
+// government-ID changes are queued for admin approval.
 app.post('/api/me/201', A.requireAuth, (req, res) => {
   const body = req.body || {};
   const data = getCompanyData();
   const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+
   if (emp) {
-    applySelf201(emp, body);
-    try { saveCompanyData(data); }
-    catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
-    audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
-      'update', 'employee', (emp.code || ('user ' + req.user.id)) + ' updated their own 201 (contact / bank / government IDs)');
-    return res.json({ ok: true, employee: emp });
+    let contactChanged = false;
+    CONTACT_201.forEach(function (f) { if (f in body) { emp[f] = trimVal(body[f]); contactChanged = true; } });
+    if (contactChanged) {
+      try { saveCompanyData(data); }
+      catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+      audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
+        'update', 'employee', (emp.code || ('user ' + req.user.id)) + ' updated their own contact details');
+    }
+    // Bank / gov-ID changes that actually differ from the current record → pending.
+    const changes = {};
+    APPROVAL_201.forEach(function (f) {
+      if (f in body) { const v = trimVal(body[f]); if (String(v || '') !== String(emp[f] || '')) changes[f] = v; }
+    });
+    let pending = null;
+    if (Object.keys(changes).length) {
+      db.prepare("DELETE FROM profile_change_requests WHERE user_id = ? AND status = 'pending'").run(req.user.id);
+      db.prepare('INSERT INTO profile_change_requests (user_id, employee_code, fields_json) VALUES (?, ?, ?)')
+        .run(req.user.id, emp.code || null, JSON.stringify(changes));
+      pending = changes;
+      notifyAll(adminUsers(), 'profile', 'Bank / government-ID change to review',
+        (emp.lastName || '') + ', ' + (emp.firstName || '') + ' (' + (emp.code || '') + ') requested a change to their bank / government-ID details.');
+      audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
+        'create', 'profile change', (emp.code || '') + ' requested bank/gov-ID change: ' + Object.keys(changes).join(', '));
+    }
+    return res.json({ ok: true, contactApplied: contactChanged, pending: pending });
   }
-  // Not yet linked to a 201 record — keep the details on their sign-up profile so
-  // they carry over when an administrator finalizes the 201.
+
+  // Not yet linked to a 201 — everything is just kept on the sign-up profile
+  // (an administrator finalizes it later), so no approval step is needed.
   const profile = JSON.parse(req.user.profile_json || '{}');
-  applySelf201(profile, body);
+  CONTACT_201.concat(APPROVAL_201).forEach(function (f) { if (f in body) profile[f] = trimVal(body[f]); });
   db.prepare('UPDATE users SET profile_json = ? WHERE id = ?').run(JSON.stringify(profile), req.user.id);
-  audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
-    'update', 'user', 'Updated their own contact / bank / government-ID details');
   res.json({ ok: true, profile: profile });
 });
 
