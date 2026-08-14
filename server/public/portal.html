@@ -100,6 +100,7 @@
     <a href="#" data-tab="overtime">Overtime</a>
     <a href="#" data-tab="loans">Loans</a>
     <a href="#" data-tab="payslips">My Payslips</a>
+    <a href="#" data-tab="documents">Documents</a>
     <a href="#" data-tab="security">Security</a>
   </nav>
   <main id="view"></main>
@@ -180,7 +181,7 @@
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
       ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, teamcal: viewTeamCal, overtime: viewOvertime, loans: viewLoans,
-         payslips: viewPayslips, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
+         payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
     // ---- bootstrap ----
@@ -526,6 +527,11 @@
         '<div id="calWrap" style="margin-top:14px"></div>' +
         '<div class="legend" id="calNote"></div>' +
         '<label style="margin-top:6px">Reason</label><textarea id="lReason" rows="2" style="width:100%"></textarea>' +
+        '<div id="lAttachWrap" style="display:none;margin-top:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px">' +
+        '<label id="lAttachLabel" style="font-weight:700;color:#17408b"></label>' +
+        '<div class="muted" id="lAttachHint" style="font-size:12px;margin-bottom:6px"></div>' +
+        '<input type="file" id="lAttachFile" accept="image/*,application/pdf">' +
+        '<span id="lAttachName" class="muted" style="font-size:12px"></span></div>' +
         '<div id="selSummary" class="legend"></div>' +
         '<button class="btn" id="lSubmit" style="margin-top:8px">Submit Request</button><span id="lMsg" class="msg"></span>' +
         '</div></div><div class="card"><h2>My Leave Requests</h2><div class="in scroll" id="lList">Loading…</div></div>';
@@ -542,12 +548,37 @@
         document.getElementById('lType').addEventListener('change', function () {
           leaveState.sel = {};
           if (this.value === 'UAL') showUalNotice();
+          updateLeaveAttach();
           renderCal();
         });
+        updateLeaveAttach();
         renderCal();
+      });
+      var af = document.getElementById('lAttachFile');
+      if (af) af.addEventListener('change', function () {
+        document.getElementById('lAttachName').textContent = af.files[0] ? ('  ' + af.files[0].name) : '';
       });
       document.getElementById('lSubmit').addEventListener('click', submitLeave);
       loadLeaveList();
+    }
+
+    // Sick / Emergency leave can carry a supporting document (medical certificate
+    // for SL, proof for EL). The attachment is optional but recommended.
+    function updateLeaveAttach() {
+      var type = document.getElementById('lType').value;
+      var wrap = document.getElementById('lAttachWrap');
+      if (!wrap) return;
+      var cfg = { SL: ['Medical Certificate (optional)', 'Attach a photo or scan of your medical certificate to support this sick leave.'],
+                  EL: ['Supporting Proof (optional)', 'Attach any proof supporting this emergency leave (photo or PDF).'] };
+      if (cfg[type]) {
+        document.getElementById('lAttachLabel').textContent = cfg[type][0];
+        document.getElementById('lAttachHint').textContent = cfg[type][1];
+        wrap.style.display = '';
+      } else {
+        wrap.style.display = 'none';
+        var af = document.getElementById('lAttachFile'); if (af) af.value = '';
+        document.getElementById('lAttachName').textContent = '';
+      }
     }
 
     // When paid-leave credits are exhausted, disable VL/SL/EL and steer the
@@ -644,15 +675,34 @@
       var dates = selectedDates();
       if (!dates.length) { m.textContent = '  Pick at least one day.'; m.className = 'msg err'; return; }
       var ranges = contiguousRanges(dates);
+      var af = document.getElementById('lAttachFile');
+      var attachFile = (af && (type === 'SL' || type === 'EL')) ? af.files[0] : null;
       var btn = document.getElementById('lSubmit'); btn.disabled = true;
       Promise.all(ranges.map(function (rg) {
         return api('/api/me/leave', { method: 'POST', body: JSON.stringify({ dateFrom: rg[0], dateTo: rg[1], leaveType: type, reason: reason }) });
       })).then(function (results) {
-        btn.disabled = false;
         var bad = results.filter(function (r) { return !r.ok; });
+        // Attach the supporting document to the first successfully created request.
+        var firstOk = results.filter(function (r) { return r.ok && r.body && r.body.id; })[0];
+        if (!attachFile || !firstOk) return { bad: bad };
+        return tcCompress(attachFile).then(function (dataUrl) {
+          return api('/api/me/documents', { method: 'POST', body: JSON.stringify({
+            category: type === 'SL' ? 'med_cert' : 'el_proof',
+            title: (type === 'SL' ? 'Medical Certificate' : 'EL Proof') + ' — ' + ranges[0][0],
+            dataUrl: dataUrl, leaveRequestId: firstOk.body.id }) });
+        }).then(function (dr) { return { bad: bad, docFailed: !dr.ok }; }).catch(function () { return { bad: bad, docFailed: true }; });
+      }).then(function (res) {
+        btn.disabled = false;
+        var bad = res.bad;
         if (bad.length) { m.textContent = '  ' + (bad[0].body.error || 'Some requests failed.'); m.className = 'msg err'; }
-        else { m.textContent = '  ✓ ' + ranges.length + ' request' + (ranges.length > 1 ? 's' : '') + ' submitted'; m.className = 'msg ok';
-          leaveState.sel = {}; document.getElementById('lReason').value = ''; renderCal(); }
+        else {
+          m.textContent = '  ✓ ' + ranges.length + ' request' + (ranges.length > 1 ? 's' : '') + ' submitted' +
+            (res.docFailed ? ' (but the attachment could not be saved — please add it from the Documents tab)' : (attachFile ? ' with attachment' : ''));
+          m.className = res.docFailed ? 'msg err' : 'msg ok';
+          leaveState.sel = {}; document.getElementById('lReason').value = '';
+          if (af) { af.value = ''; document.getElementById('lAttachName').textContent = ''; }
+          renderCal();
+        }
         loadLeaveList();
       });
     }
@@ -952,6 +1002,67 @@
         '</div></div>';
       document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });
       document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // ---- My Documents ----
+    var DOC_UP_CATS = [['med_cert', 'Medical Certificate'], ['el_proof', 'Emergency Leave Proof'], ['other', 'Other Document']];
+    function viewDocuments() {
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Upload a Document</h2><div class="in">' +
+        '<p class="muted">Upload a medical certificate (for sick leave), proof for an emergency leave, or any other document your HR / payroll may need. JPG, PNG or PDF, up to ~5 MB.</p>' +
+        '<div class="grid2">' +
+        '<div><label>Document type</label><select id="dCat">' + DOC_UP_CATS.map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select></div>' +
+        '<div><label>Title / description</label><input id="dTitle" style="width:100%" placeholder="e.g. Med cert Aug 6-8"></div>' +
+        '</div>' +
+        '<label style="margin-top:8px">File</label><input type="file" id="dFile" accept="image/*,application/pdf"><br>' +
+        '<button class="btn" id="dUpload" style="margin-top:10px">Upload</button><span id="dMsg" class="msg"></span>' +
+        '</div></div>' +
+        '<div class="card"><h2>My Documents</h2><div class="in scroll" id="dList">Loading…</div></div>' +
+        '<div class="card"><h2>Issued by HR / Admin</h2><div class="in scroll" id="dHrList">Loading…</div></div>';
+      document.getElementById('dUpload').addEventListener('click', uploadDocument);
+      loadDocuments();
+    }
+    function uploadDocument() {
+      var m = document.getElementById('dMsg'), f = document.getElementById('dFile').files[0];
+      if (!f) { m.textContent = '  Choose a file first.'; m.className = 'msg err'; return; }
+      var cat = document.getElementById('dCat').value, title = document.getElementById('dTitle').value;
+      var btn = document.getElementById('dUpload'); btn.disabled = true;
+      m.textContent = '  Uploading…'; m.className = 'msg';
+      tcCompress(f).then(function (dataUrl) {
+        return api('/api/me/documents', { method: 'POST', body: JSON.stringify({ category: cat, title: title, dataUrl: dataUrl }) });
+      }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Upload failed.'); m.className = 'msg err'; return; }
+        m.textContent = '  ✓ Uploaded'; m.className = 'msg ok';
+        document.getElementById('dFile').value = ''; document.getElementById('dTitle').value = '';
+        loadDocuments();
+      }).catch(function () { btn.disabled = false; m.textContent = '  Could not read that file.'; m.className = 'msg err'; });
+    }
+    function docRowsHtml(list, mine) {
+      if (!list.length) return '<p class="muted">' + (mine ? 'No documents uploaded yet.' : 'No documents issued to you.') + '</p>';
+      return '<table><thead><tr><th>Type</th><th>Title</th><th>Date</th><th></th></tr></thead><tbody>' +
+        list.map(function (d) {
+          return '<tr><td>' + esc(d.categoryLabel) + '</td><td>' + esc(d.title || '—') +
+            (d.leave_request_id ? ' <span class="badge" style="background:#dbeafe;color:#1e40af">leave</span>' : '') +
+            '</td><td>' + esc((d.created_at || '').slice(0, 10)) + '</td>' +
+            '<td><a class="btn sm ghost" href="/api/document/' + d.id + '" target="_blank">View</a>' +
+            (mine ? ' <button class="btn sm ghost" data-del="' + d.id + '">Delete</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+    function loadDocuments() {
+      api('/api/me/documents').then(function (r) {
+        var all = (r.body && r.body.documents) || [];
+        var mine = all.filter(function (d) { return d.direction === 'employee'; });
+        var hr = all.filter(function (d) { return d.direction === 'admin'; });
+        document.getElementById('dList').innerHTML = docRowsHtml(mine, true);
+        document.getElementById('dHrList').innerHTML = docRowsHtml(hr, false);
+        document.querySelectorAll('#dList [data-del]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            if (!confirm('Delete this document?')) return;
+            api('/api/me/documents/' + b.dataset.del, { method: 'DELETE' }).then(loadDocuments);
+          });
+        });
+      });
     }
 
     // ---- Supervisor: Team DTR (view-only) ----

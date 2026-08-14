@@ -1290,6 +1290,98 @@ app.get('/api/admin/photo/:code', A.requireRole('superadmin', 'admin_payroll', '
   serveImage(res, db.prepare('SELECT mime, data FROM profile_photos WHERE user_id = ?').get(u.id));
 });
 
+/* ---- documents: employee uploads (med cert / EL proof) + HR-issued (NTE / NOD) ---- */
+const DOC_MIME = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1 };
+const DOC_LABELS = { med_cert: 'Medical Certificate', el_proof: 'Emergency Leave Proof', other: 'Other Document',
+  nte: 'Notice to Explain (NTE)', nod: 'Notice of Decision', memo: 'Memo' };
+const EMPLOYEE_DOC_CATS = { med_cert: 1, el_proof: 1, other: 1 };
+const ADMIN_DOC_CATS = { nte: 1, nod: 1, memo: 1, other: 1 };
+const docIssuers = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
+const docViewers = A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor');
+function docMeta(r) {
+  return { id: r.id, direction: r.direction, category: r.category, categoryLabel: DOC_LABELS[r.category] || r.category,
+    title: r.title, note: r.note, mime: r.mime, leave_request_id: r.leave_request_id, created_at: r.created_at,
+    employee_code: r.subject_employee_code, full_name: r.full_name, uploader_role: r.uploader_role };
+}
+function docTooBig(b64) { return b64.length > 6.8 * 1024 * 1024; } // ~5 MB of file
+
+app.post('/api/me/documents', A.requireAuth, (req, res) => {
+  const { category, title, note, dataUrl, leaveRequestId } = req.body || {};
+  if (!EMPLOYEE_DOC_CATS[category]) return res.status(400).json({ error: 'Choose a valid document type.' });
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed || !DOC_MIME[parsed.mime]) return res.status(400).json({ error: 'Attach a JPG, PNG, WEBP or PDF file.' });
+  if (docTooBig(parsed.b64)) return res.status(400).json({ error: 'That file is too large (max ~5 MB).' });
+  const info = db.prepare(
+    "INSERT INTO documents (subject_user_id, subject_employee_code, direction, category, title, note, mime, data, leave_request_id, uploaded_by, uploader_role) " +
+    "VALUES (?, ?, 'employee', ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(req.user.id, req.user.employee_code || null, category, String(title || '').slice(0, 200), String(note || '').slice(0, 500),
+    parsed.mime, parsed.b64, leaveRequestId || null, req.user.id, req.user.role);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+app.get('/api/me/documents', A.requireAuth, (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, direction, category, title, note, mime, leave_request_id, created_at, subject_employee_code, uploader_role FROM documents WHERE subject_user_id = ? ORDER BY created_at DESC'
+  ).all(req.user.id);
+  res.json({ documents: rows.map(docMeta) });
+});
+app.delete('/api/me/documents/:id', A.requireAuth, (req, res) => {
+  const info = db.prepare("DELETE FROM documents WHERE id = ? AND subject_user_id = ? AND direction = 'employee'").run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Not found.' });
+  res.json({ ok: true });
+});
+// HR/admin issues a document to an employee (NTE, Notice of Decision, memo).
+app.post('/api/admin/documents', docIssuers, (req, res) => {
+  const { employeeCode, category, title, note, dataUrl } = req.body || {};
+  if (!ADMIN_DOC_CATS[category]) return res.status(400).json({ error: 'Choose a valid document type.' });
+  if (!employeeCode) return res.status(400).json({ error: 'Choose an employee.' });
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed || !DOC_MIME[parsed.mime]) return res.status(400).json({ error: 'Attach a JPG, PNG, WEBP or PDF file.' });
+  if (docTooBig(parsed.b64)) return res.status(400).json({ error: 'That file is too large (max ~5 MB).' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, employeeCode);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+  if (req.user.location_id && (emp.locationId || null) !== req.user.location_id) return res.status(403).json({ error: 'Not allowed for this location.' });
+  const u = db.prepare('SELECT id FROM users WHERE employee_code = ?').get(employeeCode);
+  const info = db.prepare(
+    "INSERT INTO documents (subject_user_id, subject_employee_code, direction, category, title, note, mime, data, uploaded_by, uploader_role) " +
+    "VALUES (?, ?, 'admin', ?, ?, ?, ?, ?, ?, ?)"
+  ).run(u ? u.id : null, employeeCode, category, String(title || '').slice(0, 200), String(note || '').slice(0, 500), parsed.mime, parsed.b64, req.user.id, req.user.role);
+  if (u) notify(u.id, 'document', (DOC_LABELS[category] || 'Document') + ' issued',
+    'HR issued you a document: ' + (title || DOC_LABELS[category] || 'document') + '. Open the Documents tab to view it.');
+  audit(req, 'create', 'document', (employeeCode || '') + ' issued ' + (DOC_LABELS[category] || category) + (title ? (' — ' + title) : ''));
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+app.get('/api/admin/documents', docViewers, (req, res) => {
+  const code = req.query.employeeCode;
+  let rows = code
+    ? db.prepare('SELECT d.*, u.full_name FROM documents d LEFT JOIN users u ON u.id = d.subject_user_id WHERE d.subject_employee_code = ? ORDER BY d.created_at DESC').all(code)
+    : db.prepare('SELECT d.*, u.full_name FROM documents d LEFT JOIN users u ON u.id = d.subject_user_id ORDER BY d.created_at DESC LIMIT 200').all();
+  if (req.user.location_id) {
+    const loc = {}; (getCompanyData().employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+    rows = rows.filter(function (r) { return loc[r.subject_employee_code] === req.user.location_id; });
+  }
+  res.json({ documents: rows.map(docMeta) });
+});
+app.delete('/api/admin/documents/:id', A.requireRole('superadmin', 'admin_payroll'), (req, res) => {
+  db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+// Serve one document's file — the subject employee, or an admin-app role (scoped).
+app.get('/api/document/:id', A.requireAuth, (req, res) => {
+  const d = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id);
+  if (!d) return res.status(404).end();
+  const isSubject = d.subject_user_id && d.subject_user_id === req.user.id;
+  const isAdmin = ['superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'].indexOf(req.user.role) >= 0;
+  if (!isSubject && !isAdmin) return res.status(403).end();
+  if (!isSubject && isAdmin && req.user.location_id) {
+    const loc = {}; (getCompanyData().employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+    if (loc[d.subject_employee_code] !== req.user.location_id) return res.status(403).end();
+  }
+  res.set('Content-Type', d.mime);
+  res.set('Content-Disposition', 'inline; filename="doc-' + d.id + '"');
+  res.send(Buffer.from(d.data, 'base64'));
+});
+
 /* ---- in-app notifications ---- */
 app.get('/api/me/notifications', A.requireAuth, (req, res) => {
   const items = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);
@@ -1441,11 +1533,11 @@ app.post('/api/me/leave', A.requireAuth, (req, res) => {
       }
     }
   }
-  db.prepare(
+  const info = db.prepare(
     `INSERT INTO leave_requests (user_id, employee_code, date_from, date_to, leave_type, reason)
      VALUES (?, ?, ?, ?, ?, ?)`
   ).run(req.user.id, req.user.employee_code, dateFrom, dateTo, type, reason || '');
-  res.json({ ok: true });
+  res.json({ ok: true, id: info.lastInsertRowid });
 });
 
 // Own DTR for a period (read from company data).
