@@ -68,6 +68,9 @@
         schedOut: emp.schedTimeOut || null,
         // Per-weekday recurring schedule (overrides the base shift for that day).
         weekSchedule: emp.weekSchedule || null,
+        // Explicit per-calendar-month schedule (wins over the weekday schedule for
+        // any month it configures; a blank day there counts as a rest day).
+        monthSchedule: emp.monthSchedule || null,
         // Night differential is on unless switched off company-wide in settings.
         nightDiff: !(meta.nightDiff && meta.nightDiff.enabled === false),
         ot: otPolicy,

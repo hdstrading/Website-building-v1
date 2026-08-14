@@ -310,22 +310,98 @@
     function txt(name, label, type) {
       return field(label, '<input name="' + name + '" type="' + (type || 'text') + '" value="' + esc(emp[name] || '') + '">');
     }
-    // Per-day (weekly) schedule table. Each row overrides the base shift for that
-    // weekday; leaving a row blank falls back to the base Work Schedule above.
-    var WD_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    function weekScheduleTable() {
-      var wsAll = emp.weekSchedule || {};
-      var rows = WD_NAMES.map(function (nm, wd) {
-        var w = wsAll[wd] || wsAll[String(wd)] || {};
-        return '<tr>' +
-          '<td>' + nm + '</td>' +
-          '<td><input name="ws_' + wd + '_in" value="' + esc(w.in || '') + '" placeholder="' + esc(emp.schedTimeIn || '08:00') + '" style="width:90px"></td>' +
-          '<td><input name="ws_' + wd + '_out" value="' + esc(w.out || '') + '" placeholder="' + esc(emp.schedTimeOut || '17:00') + '" style="width:90px"></td>' +
-          '<td><input name="ws_' + wd + '_brk" type="number" value="' + (w.brk != null ? w.brk : '') + '" placeholder="' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + '" style="width:64px"></td>' +
-          '<td style="text-align:center"><input name="ws_' + wd + '_off" type="checkbox"' + (w.off ? ' checked' : '') + '></td>' +
-        '</tr>';
-      }).join('');
-      return '<table class="tbl"><thead><tr><th>Day</th><th>Time In</th><th>Time Out</th><th>Break (min)</th><th>Day off</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    // ---- Monthly schedule grid ------------------------------------------------
+    // Each calendar month can carry an explicit per-date shift. The grid is the
+    // source of truth for any month it configures: a day left blank is a rest day.
+    // Months never configured here fall back to the base Work Schedule above.
+    var MS_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    var MS_WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var monthSched = emp.monthSchedule ? JSON.parse(JSON.stringify(emp.monthSchedule)) : {};
+    var msTouched = {}; // months the admin actively edited/cleared this session
+    function msPad(n) { return (n < 10 ? '0' : '') + n; }
+    function msKeyOf(d) { return d.getFullYear() + '-' + msPad(d.getMonth() + 1); }
+    var msCur = msKeyOf(new Date());
+    function msPrevKey(k) { var p = k.split('-'); var d = new Date(+p[0], +p[1] - 1, 1); d.setMonth(d.getMonth() - 1); return msKeyOf(d); }
+    function msLabel(k) { var p = k.split('-'); return MS_MONTHS[(+p[1]) - 1] + ' ' + p[0]; }
+    function msSplit(s) { var m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '')); return m ? [msPad(+m[1]), m[2]] : ['', '']; }
+    function msHrOpts(sel) { var o = '<option value="">—</option>'; for (var h = 0; h < 24; h++) { var v = msPad(h); o += '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + v + '</option>'; } return o; }
+    function msMinOpts(sel) { var o = '<option value="">—</option>'; for (var m = 0; m < 60; m += 5) { var v = msPad(m); o += '<option value="' + v + '"' + (v === sel ? ' selected' : '') + '>' + v + '</option>'; } return o; }
+    function msBaseShift() {
+      var f = msOv && msOv.querySelector('form');
+      var gi = f && f.querySelector('[name=schedTimeIn]'), go = f && f.querySelector('[name=schedTimeOut]');
+      var i = (gi && gi.value) || emp.schedTimeIn || '08:00';
+      var o = (go && go.value) || emp.schedTimeOut || '17:00';
+      return { in: msSplit(i)[0] ? i : '08:00', out: msSplit(o)[0] ? o : '17:00' };
+    }
+    var msOv = null; // set to the modal overlay once created
+    function renderMonthGrid() {
+      var host = msOv && msOv.querySelector('#monthSchedHost');
+      if (!host) return;
+      var p = msCur.split('-'); var year = +p[0], mon = (+p[1]) - 1;
+      var daysIn = new Date(year, mon + 1, 0).getDate();
+      var monthObj = monthSched[msCur] || {};
+      var rows = '';
+      for (var day = 1; day <= daysIn; day++) {
+        var e = monthObj[day] || monthObj[String(day)] || {};
+        var ip = msSplit(e.in), op = msSplit(e.out);
+        var wd = new Date(year, mon, day).getDay();
+        var rest = !(e.in || e.out);
+        rows += '<tr data-day="' + day + '"' + (rest ? ' class="ms-rest"' : '') + '>' +
+          '<td>' + day + '</td><td class="ms-wd">' + MS_WD[wd] + '</td>' +
+          '<td><select class="ms-ih">' + msHrOpts(ip[0]) + '</select> : <select class="ms-im">' + msMinOpts(ip[1]) + '</select></td>' +
+          '<td><select class="ms-oh">' + msHrOpts(op[0]) + '</select> : <select class="ms-om">' + msMinOpts(op[1]) + '</select></td>' +
+          '<td class="ms-tag" style="color:#94a3b8;font-size:12px">' + (rest ? 'Rest day' : '') + '</td></tr>';
+      }
+      host.innerHTML =
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">' +
+          '<button type="button" class="btn sm" data-ms="prev">‹</button>' +
+          '<b style="min-width:130px;text-align:center">' + msLabel(msCur) + '</b>' +
+          '<button type="button" class="btn sm" data-ms="next">›</button>' +
+          '<span style="flex:1"></span>' +
+          '<button type="button" class="btn sm" data-ms="copy">Copy previous month</button>' +
+          '<button type="button" class="btn sm" data-ms="fill">Fill all with default shift</button>' +
+          '<button type="button" class="btn sm ghost" data-ms="clear">Clear month (all rest)</button>' +
+        '</div>' +
+        '<div style="max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px">' +
+        '<table class="tbl"><thead><tr><th>Date</th><th>Day</th><th>Time In</th><th>Time Out</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+      wireMonthGrid(host);
+    }
+    function msEnsureMonth() { msTouched[msCur] = true; if (!monthSched[msCur]) monthSched[msCur] = {}; return monthSched[msCur]; }
+    function msUpdateRow(tr) {
+      var ih = tr.querySelector('.ms-ih').value, im = tr.querySelector('.ms-im').value;
+      var oh = tr.querySelector('.ms-oh').value, om = tr.querySelector('.ms-om').value;
+      var inV = ih !== '' ? (ih + ':' + (im || '00')) : '';
+      var outV = oh !== '' ? (oh + ':' + (om || '00')) : '';
+      var m = msEnsureMonth(); var day = tr.getAttribute('data-day');
+      if (inV || outV) m[day] = { in: inV, out: outV }; else delete m[day];
+      var rest = !(inV || outV);
+      tr.classList.toggle('ms-rest', rest);
+      tr.querySelector('.ms-tag').textContent = rest ? 'Rest day' : '';
+    }
+    function wireMonthGrid(host) {
+      host.querySelectorAll('tbody tr').forEach(function (tr) {
+        tr.querySelectorAll('select').forEach(function (sel) {
+          sel.addEventListener('change', function () { msUpdateRow(tr); });
+        });
+      });
+      host.querySelectorAll('[data-ms]').forEach(function (b) {
+        b.onclick = function () {
+          var act = b.getAttribute('data-ms');
+          if (act === 'prev') { var pp = msCur.split('-'); var d = new Date(+pp[0], +pp[1] - 1, 1); d.setMonth(d.getMonth() - 1); msCur = msKeyOf(d); renderMonthGrid(); }
+          else if (act === 'next') { var np = msCur.split('-'); var d2 = new Date(+np[0], +np[1] - 1, 1); d2.setMonth(d2.getMonth() + 1); msCur = msKeyOf(d2); renderMonthGrid(); }
+          else if (act === 'copy') {
+            var src = monthSched[msPrevKey(msCur)];
+            if (!src || !Object.keys(src).length) { alert('The previous month (' + msLabel(msPrevKey(msCur)) + ') has no schedule to copy.'); return; }
+            msTouched[msCur] = true; monthSched[msCur] = JSON.parse(JSON.stringify(src)); renderMonthGrid();
+          } else if (act === 'fill') {
+            var bs = msBaseShift(); var pp2 = msCur.split('-'); var di = new Date(+pp2[0], +pp2[1], 0).getDate();
+            var mo = msEnsureMonth(); for (var dd = 1; dd <= di; dd++) mo[dd] = { in: bs.in, out: bs.out }; renderMonthGrid();
+          } else if (act === 'clear') {
+            msTouched[msCur] = true; monthSched[msCur] = {}; renderMonthGrid();
+          }
+        };
+      });
     }
     var body =
       '<h4 class="form-section">Personal Information</h4><div class="grid2">' +
@@ -375,10 +451,12 @@
           '<small class="hint">Work beyond this counts as overtime (per your OT policy).</small>') +
         field('Break (minutes)', '<input name="schedBreakMins" type="number" value="' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + '">') +
       '</div>' +
-      '<h4 class="form-section">Per-day Schedule (optional)</h4>' +
-      '<p class="sub">Set different hours for specific weekdays — e.g. Monday 08:00–17:00, Tuesday 06:00–15:00. ' +
-      'Leave a row blank to use the default shift above. Tick <b>Day off</b> for a weekly rest day (work rendered then earns rest-day pay).</p>' +
-      weekScheduleTable() +
+      '<h4 class="form-section">Monthly Schedule</h4>' +
+      '<p class="sub">Set each day\'s <b>Time In</b> and <b>Time Out</b> for the month using the drop-downs. ' +
+      'Leave a day blank to make it a <b>rest day</b> (work rendered then earns rest-day pay). ' +
+      'Use <b>Copy previous month</b> to duplicate last month\'s pattern, or <b>Fill all with default shift</b> to apply the shift above to every day. ' +
+      'Months you don\'t set here fall back to the default shift.</p>' +
+      '<div id="monthSchedHost"></div>' +
       '<h4 class="form-section">Leave Credits (Service Incentive Leave)</h4><div class="grid2">' +
         field('Leave Credits / Year',
           '<input name="leaveCreditsPerYear" type="number" step="0.5" value="' + (emp.leaveCreditsPerYear != null ? emp.leaveCreditsPerYear : (emp.employmentStatus === 'regular' ? 5 : 0)) + '">' +
@@ -402,7 +480,7 @@
         txt('emergencyName', 'Contact Name') + txt('emergencyRelation', 'Relationship') +
         txt('emergencyContact', 'Contact Number') +
       '</div>';
-    modal((emp.id ? 'Edit' : 'Add') + ' Employee', body, function (form) {
+    var ov = modal((emp.id ? 'Edit' : 'Add') + ' Employee', body, function (form) {
       var data = collect(form);
       data.id = emp.id;
       data.basicSalary = parseFloat(data.basicSalary) || 0;
@@ -412,24 +490,24 @@
       data.leaveCreditsPerYear = parseFloat(data.leaveCreditsPerYear) || 0;
       data.leaveCreditsUsed = parseFloat(data.leaveCreditsUsed) || 0;
       data.schedBreakMins = data.schedBreakMins !== '' ? (parseInt(data.schedBreakMins, 10) || 0) : 60;
-      // Reassemble the per-day (weekly) schedule from the ws_<wd>_* fields. Only
-      // keep weekdays that actually carry an override (a time set or a day off).
-      var week = {};
-      for (var wd = 0; wd < 7; wd++) {
-        var win = (data['ws_' + wd + '_in'] || '').trim();
-        var wout = (data['ws_' + wd + '_out'] || '').trim();
-        var wbrk = (data['ws_' + wd + '_brk'] || '').toString().trim();
-        var woff = data['ws_' + wd + '_off'] === true || data['ws_' + wd + '_off'] === 'true';
-        delete data['ws_' + wd + '_in']; delete data['ws_' + wd + '_out'];
-        delete data['ws_' + wd + '_brk']; delete data['ws_' + wd + '_off'];
-        var entry = {};
-        if (win) entry.in = win;
-        if (wout) entry.out = wout;
-        if (wbrk !== '') entry.brk = parseInt(wbrk, 10) || 0;
-        if (woff) entry.off = true;
-        if (Object.keys(entry).length) week[wd] = entry;
-      }
-      if (Object.keys(week).length) data.weekSchedule = week; else delete data.weekSchedule;
+      // Preserve any legacy per-weekday schedule as-is (still honoured as a fallback
+      // for months not configured in the monthly grid).
+      if (emp.weekSchedule) data.weekSchedule = emp.weekSchedule;
+      // Serialise the monthly schedule: drop empty months so only configured
+      // months are kept (a configured month with all-blank days stays, meaning
+      // every day that month is a rest day).
+      var msClean = {};
+      Object.keys(monthSched).forEach(function (k) {
+        var mo = monthSched[k] || {}; var kept = {};
+        Object.keys(mo).forEach(function (d) {
+          var e = mo[d]; if (e && (e.in || e.out)) kept[d] = { in: e.in || '', out: e.out || '' };
+        });
+        // Keep the month if it has entries, OR the admin actively configured it
+        // this session (e.g. cleared it to mean "all rest days"), OR it was already
+        // stored on the record. Merely viewing an empty month does not persist it.
+        if (Object.keys(kept).length || msTouched[k] || (emp.monthSchedule && emp.monthSchedule[k])) msClean[k] = kept;
+      });
+      if (Object.keys(msClean).length) data.monthSchedule = msClean; else delete data.monthSchedule;
       data.active = data.active === 'true';
       data.deductSSS = data.deductSSS === 'true';
       data.deductPhilHealth = data.deductPhilHealth === 'true';
@@ -450,6 +528,8 @@
       S.upsert('employees', data);
       renderView();
     }, 'wide');
+    msOv = ov;
+    renderMonthGrid();
   }
 
   /* ---- 201 File (printable employee record) ---- */
@@ -663,6 +743,7 @@
         var r = PH.dtr.computeDay(d, {
           defaultBreak: e.schedBreakMins != null ? e.schedBreakMins : 60,
           schedIn: e.schedTimeIn || null, schedOut: e.schedTimeOut || null,
+          weekSchedule: e.weekSchedule || null, monthSchedule: e.monthSchedule || null,
           ot: otPolicy, requireOtAuth: false // want the ungated (potential) OT here
         });
         var post = r.otMinutes || 0, pre = r.preOtMinutes || 0;

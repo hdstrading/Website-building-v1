@@ -48,6 +48,7 @@ function overtimeForDay(companyData, emp, dtrDay) {
     defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
     schedIn: emp.schedTimeIn || null, schedOut: emp.schedTimeOut || null,
     weekSchedule: emp.weekSchedule || null,
+    monthSchedule: emp.monthSchedule || null,
     ot: otPolicy, requireOtAuth: false
   });
   const pay = PH.dtr.computeDayPay(r, rates.hourly);
