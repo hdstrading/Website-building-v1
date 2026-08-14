@@ -1154,6 +1154,41 @@ app.get('/api/me/profile', A.requireAuth, (req, res) => {
   });
 });
 
+// Fields an employee may edit on their OWN 201 — personal details only. Anything
+// that affects pay (salary, employment type/status, schedule, code, location,
+// deductions, leave credits, active) is intentionally NOT in this list.
+const SELF_EDITABLE_201 = ['contactNumber', 'email', 'address', 'civilStatus',
+  'emergencyName', 'emergencyRelation', 'emergencyContact',
+  'bankName', 'bankAccountName', 'bankAccountNumber',
+  'sssNo', 'philhealthNo', 'pagibigNo', 'tin'];
+function applySelf201(target, body) {
+  SELF_EDITABLE_201.forEach(function (f) {
+    if (f in body) target[f] = (typeof body[f] === 'string') ? body[f].trim() : body[f];
+  });
+}
+// Employee updates their own 201 (contact / bank / government IDs only).
+app.post('/api/me/201', A.requireAuth, (req, res) => {
+  const body = req.body || {};
+  const data = getCompanyData();
+  const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+  if (emp) {
+    applySelf201(emp, body);
+    try { saveCompanyData(data); }
+    catch (e) { return res.status(e.code === 'CONFLICT' ? 409 : 500).json({ error: e.message }); }
+    audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
+      'update', 'employee', (emp.code || ('user ' + req.user.id)) + ' updated their own 201 (contact / bank / government IDs)');
+    return res.json({ ok: true, employee: emp });
+  }
+  // Not yet linked to a 201 record — keep the details on their sign-up profile so
+  // they carry over when an administrator finalizes the 201.
+  const profile = JSON.parse(req.user.profile_json || '{}');
+  applySelf201(profile, body);
+  db.prepare('UPDATE users SET profile_json = ? WHERE id = ?').run(JSON.stringify(profile), req.user.id);
+  audit({ user: { id: req.user.id, email: req.user.email, role: req.user.role } },
+    'update', 'user', 'Updated their own contact / bank / government-ID details');
+  res.json({ ok: true, profile: profile });
+});
+
 /* ---- in-app notifications ---- */
 app.get('/api/me/notifications', A.requireAuth, (req, res) => {
   const items = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);

@@ -272,17 +272,73 @@
         ? '<p class="muted">Your account is not yet linked to an employee record. Some details you entered at sign-up are shown below; an administrator will finalize your 201 file.</p>'
         : '';
       document.getElementById('view').innerHTML =
-        '<div class="card"><h2>My 201 File</h2><div class="in">' + body +
+        '<div class="card"><h2>My 201 File <button class="btn sm" id="edit201" style="float:right">Edit My Details</button></h2><div class="in">' + body +
         '<div class="grid2"><table>' +
         row('Name', ((src.lastName || '') + ', ' + (src.firstName || '') + ' ' + (src.middleName || '')).trim()) +
         row('Position', src.position) + row('Department', src.department) +
         row('Date Hired', src.hireDate) + row('Employment Status', src.employmentStatus) +
-        row('Contact', src.contactNumber) + row('Address', src.address) +
+        row('Civil Status', src.civilStatus) +
+        row('Contact', src.contactNumber) + row('Email', src.email) + row('Address', src.address) +
+        row('Emergency Contact', [src.emergencyName, src.emergencyRelation, src.emergencyContact].filter(Boolean).join(' • ')) +
         '</table><table>' +
         row('SSS No.', src.sssNo) + row('PhilHealth No.', src.philhealthNo) +
         row('Pag-IBIG No.', src.pagibigNo) + row('TIN', src.tin) +
         row('Bank', src.bankName) + row('Account Name', src.bankAccountName) + row('Account No.', src.bankAccountNumber) +
         '</table></div></div></div>';
+      document.getElementById('edit201').addEventListener('click', editProfile);
+    }
+    function editProfile() {
+      var src = state.profile.employee || state.profile.profile || {};
+      function fld(name, label, type) {
+        return '<label>' + label + '</label><input name="' + name + '"' + (type ? ' type="' + type + '"' : '') +
+          ' value="' + esc(src[name] || '') + '" style="width:100%;max-width:340px">';
+      }
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>Edit My Details</h2><div class="in">' +
+        '<p class="muted">You can update your contact details, bank details and government IDs. ' +
+        'Pay, position and schedule are maintained by your administrator.</p>' +
+        '<form id="p201Form">' +
+        '<div class="section-title" style="font-weight:700;color:#17408b;margin:6px 0">Contact Details</div>' +
+        '<div class="grid2">' +
+        '<div>' + fld('contactNumber', 'Contact Number') + '</div>' +
+        '<div>' + fld('email', 'Email', 'email') + '</div>' +
+        '<div>' + fld('civilStatus', 'Civil Status') + '</div>' +
+        '<div>' + fld('address', 'Home Address') + '</div>' +
+        '<div>' + fld('emergencyName', 'Emergency Contact Name') + '</div>' +
+        '<div>' + fld('emergencyRelation', 'Relationship') + '</div>' +
+        '<div>' + fld('emergencyContact', 'Emergency Contact Number') + '</div>' +
+        '</div>' +
+        '<div class="section-title" style="font-weight:700;color:#17408b;margin:14px 0 6px">Bank Details</div>' +
+        '<div class="grid2">' +
+        '<div>' + fld('bankName', 'Bank Name') + '</div>' +
+        '<div>' + fld('bankAccountName', 'Account Name') + '</div>' +
+        '<div>' + fld('bankAccountNumber', 'Account Number') + '</div>' +
+        '</div>' +
+        '<div class="section-title" style="font-weight:700;color:#17408b;margin:14px 0 6px">Government IDs</div>' +
+        '<div class="grid2">' +
+        '<div>' + fld('sssNo', 'SSS No.') + '</div>' +
+        '<div>' + fld('philhealthNo', 'PhilHealth No.') + '</div>' +
+        '<div>' + fld('pagibigNo', 'Pag-IBIG No.') + '</div>' +
+        '<div>' + fld('tin', 'TIN') + '</div>' +
+        '</div>' +
+        '<div style="margin-top:14px"><button class="btn" type="submit">Save Changes</button> ' +
+        '<button class="btn ghost" type="button" id="p201Cancel">Cancel</button>' +
+        '<span id="p201Msg" class="msg"></span></div>' +
+        '</form></div></div>';
+      document.getElementById('p201Cancel').addEventListener('click', viewProfile);
+      document.getElementById('p201Form').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var payload = {};
+        new FormData(e.target).forEach(function (v, k) { payload[k] = v; });
+        var btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
+        var m = document.getElementById('p201Msg'); m.textContent = '  Saving…'; m.className = 'msg';
+        api('/api/me/201', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+          btn.disabled = false;
+          if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Could not save.'); m.className = 'msg err'; return; }
+          // Refresh the cached profile, then show the updated 201.
+          api('/api/me/profile').then(function (p) { state.profile = p.body; viewProfile(); });
+        }).catch(function () { btn.disabled = false; m.textContent = '  Network error.'; m.className = 'msg err'; });
+      });
     }
 
     // ---- My DTR ----
