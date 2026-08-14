@@ -242,7 +242,9 @@
     var emps = scopeEmps(S.list('employees'));
     var rows = emps.length ? emps.map(function (e) {
       var r = PH.payroll.rates(e);
-      return '<tr><td><b>' + esc(e.code) + '</b></td><td>' + esc(e.lastName + ', ' + e.firstName) +
+      return '<tr><td><b>' + esc(e.code) + '</b></td><td>' +
+        (IS_ONLINE ? '<img src="/api/admin/photo/' + encodeURIComponent(e.code || '') + '" style="width:26px;height:26px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px" onerror="this.style.display=\'none\'">' : '') +
+        esc(e.lastName + ', ' + e.firstName) +
         '</td><td>' + esc(e.position || '') + '</td>' +
         (hasLoc ? '<td>' + esc(locationName(e.locationId) || '—') + '</td>' : '') +
         '<td>' + esc(e.employmentType) +

@@ -1256,6 +1256,40 @@ app.post('/api/me/201', A.requireAuth, (req, res) => {
   res.json({ ok: true, profile: profile });
 });
 
+/* ---- profile photo (latest self picture) ---- */
+function serveImage(res, row) {
+  if (!row) return res.status(404).end();
+  res.set('Content-Type', row.mime);
+  res.set('Cache-Control', 'private, max-age=30');
+  res.send(Buffer.from(row.data, 'base64'));
+}
+app.post('/api/me/photo', A.requireAuth, (req, res) => {
+  const parsed = parseDataUrl((req.body || {}).dataUrl);
+  if (!parsed || !/^image\/(jpeg|png|webp)$/.test(parsed.mime)) return res.status(400).json({ error: 'Please attach a JPG, PNG or WEBP image.' });
+  if (parsed.b64.length > 4 * 1024 * 1024) return res.status(400).json({ error: 'Image is too large — please use a smaller photo.' });
+  db.prepare("INSERT INTO profile_photos (user_id, employee_code, mime, data, updated_at) VALUES (?, ?, ?, ?, datetime('now')) " +
+    "ON CONFLICT(user_id) DO UPDATE SET employee_code = excluded.employee_code, mime = excluded.mime, data = excluded.data, updated_at = datetime('now')")
+    .run(req.user.id, req.user.employee_code || null, parsed.mime, parsed.b64);
+  res.json({ ok: true });
+});
+app.get('/api/me/photo', A.requireAuth, (req, res) => {
+  serveImage(res, db.prepare('SELECT mime, data FROM profile_photos WHERE user_id = ?').get(req.user.id));
+});
+app.delete('/api/me/photo', A.requireAuth, (req, res) => {
+  db.prepare('DELETE FROM profile_photos WHERE user_id = ?').run(req.user.id);
+  res.json({ ok: true });
+});
+// Admin/HR view of an employee's photo by 201 code (location-scoped).
+app.get('/api/admin/photo/:code', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  if (req.user.location_id) {
+    const loc = {}; (getCompanyData().employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+    if (loc[req.params.code] !== req.user.location_id) return res.status(403).end();
+  }
+  const u = db.prepare('SELECT id FROM users WHERE employee_code = ?').get(req.params.code);
+  if (!u) return res.status(404).end();
+  serveImage(res, db.prepare('SELECT mime, data FROM profile_photos WHERE user_id = ?').get(u.id));
+});
+
 /* ---- in-app notifications ---- */
 app.get('/api/me/notifications', A.requireAuth, (req, res) => {
   const items = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);
