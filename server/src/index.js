@@ -1618,6 +1618,29 @@ app.get('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
   const days = ((data.dtr[period.id] || {})[emp.id]) || [];
   res.json({ period: period, days: days });
 });
+
+// My weekly schedule: the effective shift (in/out) for each day of a week, so an
+// employee knows when to log in/out. `start` is the week-start ISO (a Sunday);
+// defaults to the current week. Resolved via the shared schedule engine.
+app.get('/api/me/schedule', A.requireAuth, (req, res) => {
+  const data = getCompanyData();
+  const emp = req.user.employee_code ? findEmpByCode(data, req.user.employee_code) : null;
+  if (!emp) return res.json({ linked: false, days: [] });
+  let start = String(req.query.start || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+    const t = new Date();
+    t.setDate(t.getDate() - t.getDay()); // back up to Sunday
+    const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    start = t.getFullYear() + '-' + p2(t.getMonth() + 1) + '-' + p2(t.getDate());
+  }
+  res.json({
+    linked: true,
+    employmentType: emp.employmentType || '',
+    breakMins: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
+    weekStart: start,
+    days: engine.scheduleForWeek(data, emp, start)
+  });
+});
 // DTR is view-only for employees — attendance comes from the biometric device /
 // admin, so employees cannot change their own records (this would affect payroll).
 app.post('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
