@@ -210,6 +210,10 @@ CREATE TABLE IF NOT EXISTS bulletin_acks (
   PRIMARY KEY (bulletin_id, user_id)
 );
 `);
+// Optional attached memo file (PDF/DOCX) on a bulletin, stored as base64.
+try { db.exec("ALTER TABLE bulletins ADD COLUMN file_mime TEXT"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE bulletins ADD COLUMN file_name TEXT"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE bulletins ADD COLUMN file_data TEXT"); } catch (e) { /* column already present */ }
 
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.

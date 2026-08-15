@@ -468,6 +468,8 @@
           '<label class="acc-chk" style="align-self:center"><input type="checkbox" id="bl-pin"> Pin</label></div>' +
           '<div class="acc-row"><input id="bl-title" placeholder="Title" style="flex:1" maxlength="160"></div>' +
           '<div class="acc-row"><textarea id="bl-body" placeholder="Details (optional)" rows="3" style="flex:1"></textarea></div>' +
+          '<div class="acc-row"><label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Attach memo file (optional — PDF or Word)' +
+          '<input type="file" id="bl-file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label></div>' +
           '<div class="acc-row"><button class="acc-btn" id="bl-post">Post</button><span id="bl-msg" class="acc-muted"></span></div></div>' +
           '<div id="bl-list"></div>';
         document.getElementById('bl-post').onclick = postBulletin;
@@ -485,12 +487,16 @@
         endsAt: document.getElementById('bl-ends').value || null,
         pinned: document.getElementById('bl-pin').checked,
         locationId: locEl ? (locEl.value || null) : null };
+      var f = document.getElementById('bl-file').files[0];
       var btn = document.getElementById('bl-post'); btn.disabled = true; msg.textContent = ' Posting…';
-      api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+      var prep = f ? readFileDataUrl(f).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
+      prep.then(function () {
+        return api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) });
+      }).then(function (r) {
         btn.disabled = false;
         if (!r.ok) { msg.textContent = ' ' + (r.body.error || 'Failed.'); return; }
         renderBulletins();
-      });
+      }).catch(function () { btn.disabled = false; msg.textContent = ' Could not read that file.'; });
     }
     function drawBulletinList(rows) {
       var el = document.getElementById('bl-list'); if (!el) return;
@@ -499,15 +505,18 @@
       el.innerHTML = '<table class="acc-tbl"><thead><tr><th>Title</th><th>Type</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>' +
         rows.map(function (b) {
           return '<tr data-bid="' + b.id + '"><td>' + esc(b.title) + (b.pinned ? ' 📌' : '') +
+            (b.hasFile ? ' <a href="/api/bulletin-file/' + b.id + '" target="_blank" title="Open attached memo">📎</a>' : '') +
             '<div class="acc-muted">' + esc(b.authorName || '') + '</div></td>' +
             '<td>' + esc(CATL[b.category] || b.category) + '</td>' +
             '<td>' + esc(b.eventDate || (b.createdAt || '').slice(0, 10)) + (b.endsAt ? '<div class="acc-muted">until ' + esc(b.endsAt) + '</div>' : '') + '</td>' +
             '<td>' + (b.active ? '<span class="acc-badge active">active</span>' : '<span class="acc-badge">hidden</span>') + '</td>' +
-            '<td class="acc-actions"><button class="acc-btn ghost bl-toggle" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button>' +
+            '<td class="acc-actions"><button class="acc-btn ghost bl-acks">Receipts</button>' +
+            '<button class="acc-btn ghost bl-toggle" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button>' +
             '<button class="acc-btn ghost bl-del">Delete</button></td></tr>';
         }).join('') + '</tbody></table>';
       el.querySelectorAll('tr[data-bid]').forEach(function (tr) {
         var id = tr.dataset.bid;
+        tr.querySelector('.bl-acks').onclick = function () { showBulletinAcks(id); };
         tr.querySelector('.bl-toggle').onclick = function () {
           var t = tr.querySelector('.bl-toggle');
           api('/api/admin/bulletins/' + id, { method: 'POST', body: JSON.stringify({ active: t.dataset.active !== '1' }) })
@@ -517,6 +526,28 @@
           if (!confirm('Delete this bulletin?')) return;
           api('/api/admin/bulletins/' + id, { method: 'DELETE' }).then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } renderBulletins(); });
         };
+      });
+    }
+    // Read receipts: who acknowledged this bulletin and who is still pending.
+    function showBulletinAcks(id) {
+      api('/api/admin/bulletins/' + id + '/acks').then(function (r) {
+        if (!r.ok) { alert(r.body.error || 'Could not load receipts.'); return; }
+        var d = r.body;
+        var ackRows = d.acknowledged.length
+          ? d.acknowledged.map(function (a) { return '<tr><td>' + esc(a.fullName || a.email) + (a.code ? ' <span class="acc-muted">' + esc(a.code) + '</span>' : '') + '</td><td class="acc-muted">' + esc((a.at || '').replace('T', ' ').slice(0, 16)) + '</td></tr>'; }).join('')
+          : '<tr><td colspan="2" class="acc-muted">No one has acknowledged yet.</td></tr>';
+        var pendRows = d.pending.length
+          ? d.pending.map(function (p) { return '<tr><td>' + esc(p.fullName || p.email) + (p.code ? ' <span class="acc-muted">' + esc(p.code) + '</span>' : '') + '</td></tr>'; }).join('')
+          : '<tr><td class="acc-muted">Everyone has acknowledged. 🎉</td></tr>';
+        var ov = document.createElement('div');
+        ov.className = 'acc-overlay';
+        ov.innerHTML = '<div class="acc-modal" style="max-width:560px"><div class="acc-head"><b>Read Receipts</b><button class="acc-x">✕</button></div>' +
+          '<div class="acc-body"><p class="acc-muted">' + esc(d.title || '') + ' — <b>' + d.count + ' of ' + d.total + '</b> acknowledged.</p>' +
+          '<h4 style="margin:8px 0 4px">Acknowledged</h4><table class="acc-tbl"><thead><tr><th>Name</th><th>When</th></tr></thead><tbody>' + ackRows + '</tbody></table>' +
+          '<h4 style="margin:12px 0 4px">Pending</h4><table class="acc-tbl"><tbody>' + pendRows + '</tbody></table></div></div>';
+        document.body.appendChild(ov);
+        ov.querySelector('.acc-x').onclick = function () { ov.remove(); };
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
       });
     }
 
