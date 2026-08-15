@@ -17,7 +17,9 @@
       monthlyBasic = emp.basicSalary || 0;
       daily = round2(monthlyBasic * 12 / factor);
       hourly = round2(daily / 8);
-    } else if (emp.employmentType === 'daily') {
+    } else if (emp.employmentType === 'daily' || emp.employmentType === 'output') {
+      // 'output' (field) employees are paid a fixed rate per day worked; the rate
+      // is their daily rate, so pricing works the same as a daily-paid employee.
       daily = emp.basicSalary || 0;
       hourly = round2(daily / 8);
       monthlyBasic = round2(daily * factor / 12);
@@ -60,9 +62,12 @@
     // ---- Basic / worked pay -------------------------------------------------
     var dtr = null;
     var basicPay;
+    var isOutput = emp.employmentType === 'output';
     if (ctx.dtrDays && ctx.dtrDays.length) {
       var otPolicy = meta.overtime || null;
       dtr = PH.dtr.computeDTR(ctx.dtrDays, r.hourly, {
+        // Field / output-based employees are paid per day worked (no time punches).
+        outputBased: isOutput,
         defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
         schedIn: emp.schedTimeIn || null,
         schedOut: emp.schedTimeOut || null,
@@ -81,8 +86,9 @@
       // Base pay from actual worked regular hours; OT & ND added separately.
       basicPay = dtr.regularPay;
     } else {
-      // No DTR: pay the period's prorated basic salary.
-      basicPay = round2(r.monthlyBasic / ppm);
+      // No DTR: monthly/daily/hourly staff get the period's prorated basic salary;
+      // field/output staff are paid only for days worked, so no DTR means no pay.
+      basicPay = isOutput ? 0 : round2(r.monthlyBasic / ppm);
       dtr = { regularPay: basicPay, overtimePay: 0, nightDiffPay: 0,
         regularHolidayPay: 0, specialHolidayPay: 0, restDayPay: 0,
         lateDeduction: 0, undertimeDeduction: 0, daysPresent: 0, daysAbsent: 0,
