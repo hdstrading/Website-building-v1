@@ -495,22 +495,44 @@ function leaveCreditsRemaining(emp, userId) {
 }
 
 /* ================= AUTH ================= */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Normalise an email for storage/comparison (trim + lowercase).
+function normEmail(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+// Canonical form for near-duplicate detection: strips a "+tag" suffix and, for
+// Gmail addresses, the dots in the local part (all of which route to one inbox).
+function canonEmail(s) {
+  const e = normEmail(s);
+  const at = e.indexOf('@');
+  if (at < 0) return e;
+  let local = e.slice(0, at), domain = e.slice(at + 1);
+  local = local.split('+')[0];
+  if (domain === 'gmail.com' || domain === 'googlemail.com') local = local.replace(/\./g, '');
+  return local + '@' + domain;
+}
+
 app.post('/api/auth/register', (req, res) => {
-  const { email, password, fullName, profile } = req.body || {};
+  const { password, fullName, profile } = req.body || {};
+  const email = normEmail((req.body || {}).email);
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-  const exists = db.prepare('SELECT 1 FROM users WHERE email = ?').get(String(email).toLowerCase());
+  const exists = db.prepare('SELECT 1 FROM users WHERE email = ?').get(email);
   if (exists) return res.status(409).json({ error: 'That email is already registered.' });
-  const info = db.prepare(
-    `INSERT INTO users (email, password_hash, full_name, role, status, profile_json)
-     VALUES (?, ?, ?, 'employee', 'pending', ?)`
-  ).run(String(email).toLowerCase(), A.hashPassword(password), fullName || '', JSON.stringify(profile || {}));
+  let info;
+  try {
+    info = db.prepare(
+      `INSERT INTO users (email, password_hash, full_name, role, status, profile_json)
+       VALUES (?, ?, ?, 'employee', 'pending', ?)`
+    ).run(email, A.hashPassword(password), fullName || '', JSON.stringify(profile || {}));
+  } catch (e) { // UNIQUE race — treat as an already-registered email
+    return res.status(409).json({ error: 'That email is already registered.' });
+  }
   res.json({ ok: true, id: info.lastInsertRowid, message: 'Registration submitted. An administrator must approve your account before you can sign in.' });
 });
 
 app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body || {};
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(String(email || '').toLowerCase());
+  const { password } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(normEmail((req.body || {}).email));
   if (!user || !A.verifyPassword(password || '', user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
@@ -538,7 +560,7 @@ app.post('/api/me/change-password', A.requireAuth, (req, res) => {
 
 // Forgot password: emails a reset link (only when SMTP is configured).
 app.post('/api/auth/forgot', async (req, res) => {
-  const email = String((req.body && req.body.email) || '').toLowerCase();
+  const email = normEmail((req.body && req.body.email));
   if (!mailer.configured()) {
     return res.json({ ok: true, emailConfigured: false,
       message: 'Password reset by email is not set up on this server. Please ask your administrator to reset your password.' });
@@ -574,7 +596,7 @@ app.post('/api/auth/reset', (req, res) => {
 // Requires the user to have enabled 2FA beforehand. A single generic error is
 // returned for a bad email or code so the endpoint can't be used to probe accounts.
 app.post('/api/auth/reset-2fa', (req, res) => {
-  const email = String((req.body && req.body.email) || '').toLowerCase();
+  const email = normEmail((req.body && req.body.email));
   const { code, password } = req.body || {};
   if (!password || String(password).length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   const bad = function () { return res.status(400).json({ error: 'Invalid email or authentication code.' }); };
@@ -663,11 +685,58 @@ function requireUnscoped(req, res, next) {
   next();
 }
 
+// Flag accounts that look like duplicates of another account, by:
+//   • email    — same canonical email (Gmail dots / +tag variants of one inbox)
+//   • employee — two accounts linked to the same employee (201) code
+//   • name     — same first+last name (a soft hint; real namesakes exist)
+function duplicateFlags(users) {
+  const byEmail = {}, byCode = {}, byName = {};
+  function nameKey(u) {
+    let p = {}; try { p = JSON.parse(u.profile_json || '{}'); } catch (e) { /* ignore */ }
+    const nm = ((p.firstName || '') + ' ' + (p.lastName || '')).trim() || (u.full_name || '');
+    return nm.toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+  users.forEach(function (u) {
+    (byEmail[canonEmail(u.email)] = byEmail[canonEmail(u.email)] || []).push(u.id);
+    if (u.employee_code) (byCode[u.employee_code] = byCode[u.employee_code] || []).push(u.id);
+    const nk = nameKey(u); if (nk) (byName[nk] = byName[nk] || []).push(u.id);
+  });
+  const out = {};
+  users.forEach(function (u) {
+    const reasons = [];
+    if (byEmail[canonEmail(u.email)].length > 1) reasons.push('email');
+    if (u.employee_code && byCode[u.employee_code].length > 1) reasons.push('employee');
+    const nk = nameKey(u); if (nk && byName[nk].length > 1) reasons.push('name');
+    out[u.id] = reasons;
+  });
+  return out;
+}
+
 app.get('/api/admin/users', adminMgmt, requireUnscoped, (req, res) => {
   const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC').all();
+  const flags = duplicateFlags(users);
   res.json({ users: users.map(function (u) {
-    return Object.assign(A.publicUser(u), { profile: JSON.parse(u.profile_json || '{}'), createdAt: u.created_at });
+    return Object.assign(A.publicUser(u), {
+      profile: JSON.parse(u.profile_json || '{}'), createdAt: u.created_at,
+      duplicateReasons: flags[u.id] || []
+    });
   }) });
+});
+
+// Change a user's login email (with the same duplicate safeguard as registration).
+app.post('/api/admin/users/:id/email', adminMgmt, requireUnscoped, (req, res) => {
+  const email = normEmail((req.body || {}).email);
+  if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  if (email === normEmail(user.email)) return res.json({ ok: true }); // no change
+  const clash = db.prepare('SELECT id FROM users WHERE email = ? AND id != ?').get(email, user.id);
+  if (clash) return res.status(409).json({ error: 'That email is already used by another account.' });
+  try {
+    db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, user.id);
+  } catch (e) { return res.status(409).json({ error: 'That email is already used by another account.' }); }
+  audit(req, 'update', 'user', 'Login email of ' + user.email + ' → ' + email);
+  res.json({ ok: true });
 });
 
 // Approve / activate a user, set role, and link (or create) their employee record.

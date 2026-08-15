@@ -42,6 +42,12 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  var DUP_LABELS = { email: 'same email inbox', employee: 'same employee record', name: 'same name' };
+  function dupBadge(reasons) {
+    if (!reasons || !reasons.length) return '';
+    var why = reasons.map(function (r) { return DUP_LABELS[r] || r; }).join(', ');
+    return ' <span class="acc-badge" style="background:#fee2e2;color:#b91c1c" title="Possible duplicate account: ' + esc(why) + '">⚠ duplicate</span>';
+  }
   var ROLE_OPTS = [['employee', 'Employee'], ['supervisor', 'Supervisor'], ['auditor', 'Auditor (3rd-party)'], ['finance', 'Finance'], ['admin_payroll', 'Admin — Payroll'], ['superadmin', 'Super Admin']];
   // Configured locations/branches (from the loaded company document).
   function companyLocations() { return (((window.__COMPANY__ || {}).data || {}).meta || {}).locations || []; }
@@ -84,8 +90,12 @@
       if (!pending.length) { body.innerHTML = '<p class="acc-muted">No accounts awaiting approval.</p>'; return; }
       body.innerHTML = pending.map(function (u) {
         var p = u.profile || {};
-        return '<div class="acc-card" data-uid="' + u.id + '"><div><b>' + esc(u.fullName || (p.firstName + ' ' + p.lastName)) + '</b> — ' + esc(u.email) + '</div>' +
-          '<div class="acc-muted">' + esc([p.position, p.contactNumber, p.sssNo && ('SSS ' + p.sssNo)].filter(Boolean).join(' • ')) + '</div>' +
+        var dup = u.duplicateReasons && u.duplicateReasons.length
+          ? '<div style="background:#fee2e2;color:#b91c1c;border-radius:6px;padding:4px 8px;margin-top:4px;font-size:12px">⚠ Possible duplicate of an existing account (' +
+            u.duplicateReasons.map(function (r) { return DUP_LABELS[r] || r; }).join(', ') + '). Verify before approving.</div>'
+          : '';
+        return '<div class="acc-card" data-uid="' + u.id + '"><div><b>' + esc(u.fullName || (p.firstName + ' ' + p.lastName)) + '</b> — ' + esc(u.email) + dupBadge(u.duplicateReasons) + '</div>' +
+          '<div class="acc-muted">' + esc([p.position, p.contactNumber, p.sssNo && ('SSS ' + p.sssNo)].filter(Boolean).join(' • ')) + '</div>' + dup +
           '<div class="acc-row"><select class="ap-role">' + ROLE_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === 'employee' ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
           (companyLocations().length ? '<select class="ap-loc" title="Location">' + locOptions('') + '</select>' : '') +
           '<label class="acc-chk"><input type="checkbox" class="ap-emp" checked> Create 201 record</label>' +
@@ -105,18 +115,35 @@
 
     function renderUsers(users) {
       var hasLoc = companyLocations().length > 0;
-      body.innerHTML = '<table class="acc-tbl"><thead><tr><th>Name / Email</th><th>Role</th>' +
+      var dupN = users.filter(function (u) { return u.duplicateReasons && u.duplicateReasons.length; }).length;
+      var banner = dupN
+        ? '<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:13px">' +
+          '⚠ <b>' + dupN + ' account' + (dupN > 1 ? 's' : '') + ' flagged as possible duplicate' + (dupN > 1 ? 's' : '') + '.</b> ' +
+          'Review the ⚠ rows below — disable an extra account, or fix a login email with <b>Edit email</b>.</div>'
+        : '';
+      body.innerHTML = banner + '<table class="acc-tbl"><thead><tr><th>Name / Email</th><th>Role</th>' +
         (hasLoc ? '<th>Location</th>' : '') + '<th>Status</th><th></th></tr></thead><tbody>' +
         users.map(function (u) {
-          return '<tr data-uid="' + u.id + '"><td>' + esc(u.fullName || '') + '<div class="acc-muted">' + esc(u.email) + (u.employeeCode ? ' • ' + esc(u.employeeCode) : '') + '</div></td>' +
+          return '<tr data-uid="' + u.id + '"' + (u.duplicateReasons && u.duplicateReasons.length ? ' style="background:#fff7ed"' : '') + '><td>' + esc(u.fullName || '') + dupBadge(u.duplicateReasons) + '<div class="acc-muted">' + esc(u.email) + (u.employeeCode ? ' • ' + esc(u.employeeCode) : '') + '</div></td>' +
             '<td><select class="u-role">' + ROLE_OPTS.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === u.role ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></td>' +
             (hasLoc ? '<td><select class="u-loc"' + (u.role === 'superadmin' ? ' disabled title="Super Admins see all locations"' : '') + '>' + locOptions(u.locationId || '') + '</select></td>' : '') +
             '<td><span class="acc-badge ' + u.status + '">' + u.status + '</span></td>' +
-            '<td class="acc-actions"><button class="acc-btn ghost u-toggle">' + (u.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
+            '<td class="acc-actions"><button class="acc-btn ghost u-email">Edit email</button>' +
+            '<button class="acc-btn ghost u-toggle">' + (u.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
             '<button class="acc-btn ghost u-pw">Reset password</button></td></tr>';
         }).join('') + '</tbody></table>';
       body.querySelectorAll('tr[data-uid]').forEach(function (tr) {
         var uid = tr.dataset.uid;
+        tr.querySelector('.u-email').onclick = function () {
+          var cur = tr.querySelector('.acc-muted').textContent.split(' • ')[0];
+          var next = prompt('Update login email for this account:', cur);
+          if (next === null) return;
+          api('/api/admin/users/' + uid + '/email', { method: 'POST', body: JSON.stringify({ email: next }) })
+            .then(function (r) {
+              if (!r.ok) { alert(r.body.error || 'Could not update email.'); return; }
+              renderTab('users');
+            });
+        };
         tr.querySelector('.u-role').onchange = function (e) {
           api('/api/admin/users/' + uid + '/role', { method: 'POST', body: JSON.stringify({ role: e.target.value }) })
             .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } renderTab('users'); });
