@@ -1257,7 +1257,9 @@
     });
     var re = area.querySelector('#reopen');
     if (re) re.addEventListener('click', function () {
-      period.status = 'draft'; S.upsert('periods', period); renderView();
+      if (!confirm('Reopen this payroll? Loan balances and used leave credits from this cut-off will be restored, so re-finalizing will apply the same loans, deductions and SIL again.')) return;
+      PH.payroll.reopenPeriod(period);
+      renderView();
     });
     var exp = area.querySelector('#exportRun');
     if (exp) exp.addEventListener('click', function () { exportRunCSV(period, results); });
