@@ -592,7 +592,15 @@
     function bulletinCard(b, ackable) {
       var m = BULLETIN_META[b.category] || BULLETIN_META.announcement;
       var when = b.eventDate ? ('<div class="muted" style="font-size:12px;margin-top:2px">📅 ' + esc(b.eventDate) + '</div>') : '';
-      var file = b.hasFile ? ('<div style="margin-top:8px"><a class="btn sm ghost" href="/api/bulletin-file/' + b.id + '" target="_blank">📎 Open attached memo' + (b.fileName ? ' (' + esc(b.fileName) + ')' : '') + '</a></div>') : '';
+      var file = '';
+      if (b.hasFile) {
+        if (/^image\//.test(b.fileMime || '')) {
+          file = '<div style="margin-top:8px"><a href="/api/bulletin-file/' + b.id + '" target="_blank">' +
+            '<img src="/api/bulletin-file/' + b.id + '" alt="' + esc(b.fileName || 'attachment') + '" style="max-width:100%;border-radius:8px;display:block;border:1px solid #e2e8f0"></a></div>';
+        } else {
+          file = '<div style="margin-top:8px"><a class="btn sm ghost" href="/api/bulletin-file/' + b.id + '" target="_blank">📎 Open attached memo' + (b.fileName ? ' (' + esc(b.fileName) + ')' : '') + '</a></div>';
+        }
+      }
       var ackUI = '';
       if (ackable) {
         ackUI = b.unread
@@ -660,7 +668,7 @@
         '</div>' +
         '<label>Title<input id="blkTitle" style="width:100%" maxlength="160"></label>' +
         '<label>Details<textarea id="blkBody" rows="3" style="width:100%"></textarea></label>' +
-        '<label>Attach memo file (optional — PDF or Word)<input type="file" id="blkFile" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
+        '<label>Attach memo (optional — image, PDF or Word)<input type="file" id="blkFile" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
         '<button class="btn" id="blkPost" style="margin-top:8px">Post</button><span id="blkMsg" class="msg"></span>';
       document.getElementById('blkPost').onclick = function () {
         var msg = document.getElementById('blkMsg');
@@ -671,7 +679,8 @@
           endsAt: document.getElementById('blkEnds').value || null, pinned: document.getElementById('blkPin').checked };
         var f = document.getElementById('blkFile').files[0];
         var btn = document.getElementById('blkPost'); btn.disabled = true; msg.textContent = '  Posting…'; msg.className = 'msg';
-        var prep = f ? readFileDataUrl(f).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
+        // Images are downscaled (and shown inline on the post); PDF/Word pass through.
+        var prep = f ? (/^image\//.test(f.type) ? tcCompress(f) : readFileDataUrl(f)).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
         prep.then(function () {
           return api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) });
         }).then(function (r) {
