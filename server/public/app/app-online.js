@@ -61,7 +61,7 @@
     ov.className = 'acc-overlay';
     var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a><a data-at="bulletins">Bulletins</a>' +
       (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
@@ -81,6 +81,7 @@
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
       if (tab === 'pcr') return api('/api/admin/profile-requests').then(function (r) { renderPcr(r.body.requests || []); });
       if (tab === 'documents') return renderDocuments();
+      if (tab === 'bulletins') return renderBulletins();
       if (tab === 'history') return api('/api/admin/audit-log').then(function (r) { renderHistory((r.body || {}).entries || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
@@ -444,6 +445,78 @@
             api('/api/admin/documents/' + tr.dataset.did, { method: 'DELETE' }).then(loadAdminDocs);
           };
         });
+      });
+    }
+
+    // ---- Bulletins: post HR/payroll announcements, events, holidays, memos ----
+    var BULLETIN_CATS = [['announcement', 'Announcement'], ['event', 'Event'], ['holiday', 'Holiday'], ['memo', 'Memo']];
+    function renderBulletins() {
+      api('/api/admin/bulletins').then(function (r) {
+        var rows = (r.body && r.body.bulletins) || [];
+        var locs = (r.body && r.body.locations) || [];
+        var canScope = r.body && r.body.canScope;
+        var locSel = (canScope && locs.length)
+          ? '<label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Location<select id="bl-loc"><option value="">All locations</option>' +
+            locs.map(function (l) { return '<option value="' + esc(l.id) + '">' + esc(l.name) + '</option>'; }).join('') + '</select></label>'
+          : '';
+        body.innerHTML =
+          '<div class="acc-card"><b>Post to the Bulletin Board</b>' +
+          '<div class="acc-muted" style="margin:4px 0 8px">Employees see active posts as a pop-up on login and in their Bulletin tab.</div>' +
+          '<div class="acc-row"><label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Type<select id="bl-cat">' + BULLETIN_CATS.map(function (c) { return '<option value="' + c[0] + '">' + c[1] + '</option>'; }).join('') + '</select></label>' +
+          '<label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Event/Holiday date<input type="date" id="bl-date"></label>' +
+          '<label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Show until<input type="date" id="bl-ends"></label>' + locSel +
+          '<label class="acc-chk" style="align-self:center"><input type="checkbox" id="bl-pin"> Pin</label></div>' +
+          '<div class="acc-row"><input id="bl-title" placeholder="Title" style="flex:1" maxlength="160"></div>' +
+          '<div class="acc-row"><textarea id="bl-body" placeholder="Details (optional)" rows="3" style="flex:1"></textarea></div>' +
+          '<div class="acc-row"><button class="acc-btn" id="bl-post">Post</button><span id="bl-msg" class="acc-muted"></span></div></div>' +
+          '<div id="bl-list"></div>';
+        document.getElementById('bl-post').onclick = postBulletin;
+        drawBulletinList(rows);
+      });
+    }
+    function postBulletin() {
+      var msg = document.getElementById('bl-msg');
+      var title = document.getElementById('bl-title').value.trim();
+      if (!title) { msg.textContent = ' Enter a title.'; return; }
+      var locEl = document.getElementById('bl-loc');
+      var payload = { title: title, body: document.getElementById('bl-body').value,
+        category: document.getElementById('bl-cat').value,
+        eventDate: document.getElementById('bl-date').value || null,
+        endsAt: document.getElementById('bl-ends').value || null,
+        pinned: document.getElementById('bl-pin').checked,
+        locationId: locEl ? (locEl.value || null) : null };
+      var btn = document.getElementById('bl-post'); btn.disabled = true; msg.textContent = ' Posting…';
+      api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { msg.textContent = ' ' + (r.body.error || 'Failed.'); return; }
+        renderBulletins();
+      });
+    }
+    function drawBulletinList(rows) {
+      var el = document.getElementById('bl-list'); if (!el) return;
+      if (!rows.length) { el.innerHTML = '<p class="acc-muted">No bulletins yet.</p>'; return; }
+      var CATL = { announcement: 'Announcement', event: 'Event', holiday: 'Holiday', memo: 'Memo' };
+      el.innerHTML = '<table class="acc-tbl"><thead><tr><th>Title</th><th>Type</th><th>When</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows.map(function (b) {
+          return '<tr data-bid="' + b.id + '"><td>' + esc(b.title) + (b.pinned ? ' 📌' : '') +
+            '<div class="acc-muted">' + esc(b.authorName || '') + '</div></td>' +
+            '<td>' + esc(CATL[b.category] || b.category) + '</td>' +
+            '<td>' + esc(b.eventDate || (b.createdAt || '').slice(0, 10)) + (b.endsAt ? '<div class="acc-muted">until ' + esc(b.endsAt) + '</div>' : '') + '</td>' +
+            '<td>' + (b.active ? '<span class="acc-badge active">active</span>' : '<span class="acc-badge">hidden</span>') + '</td>' +
+            '<td class="acc-actions"><button class="acc-btn ghost bl-toggle" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button>' +
+            '<button class="acc-btn ghost bl-del">Delete</button></td></tr>';
+        }).join('') + '</tbody></table>';
+      el.querySelectorAll('tr[data-bid]').forEach(function (tr) {
+        var id = tr.dataset.bid;
+        tr.querySelector('.bl-toggle').onclick = function () {
+          var t = tr.querySelector('.bl-toggle');
+          api('/api/admin/bulletins/' + id, { method: 'POST', body: JSON.stringify({ active: t.dataset.active !== '1' }) })
+            .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } renderBulletins(); });
+        };
+        tr.querySelector('.bl-del').onclick = function () {
+          if (!confirm('Delete this bulletin?')) return;
+          api('/api/admin/bulletins/' + id, { method: 'DELETE' }).then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } renderBulletins(); });
+        };
       });
     }
 

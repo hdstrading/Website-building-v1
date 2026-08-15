@@ -94,6 +94,7 @@
   </div>
   <nav class="tabs">
     <a href="#" class="active" data-tab="profile">My 201</a>
+    <a href="#" data-tab="bulletin">Bulletin</a>
     <a href="#" data-tab="dtr">My DTR</a>
     <a href="#" data-tab="schedule">My Schedule</a>
     <a href="#" data-tab="leave">File Leave</a>
@@ -182,7 +183,7 @@
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
       ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, teamcal: viewTeamCal, overtime: viewOvertime, loans: viewLoans,
-         schedule: viewSchedule, payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
+         schedule: viewSchedule, bulletin: viewBulletin, payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
     // ---- bootstrap ----
@@ -191,7 +192,9 @@
       if (me.body.user.mustChangePassword) { location.href = '/'; return; } // set a new password first
       var role = me.body.user.role;
       if (role !== 'employee' && role !== 'supervisor') { location.href = '/app'; return; }
+      state.role = role;
       state.isSupervisor = role === 'supervisor';
+      state.canPostBulletin = ['superadmin', 'admin_payroll', 'supervisor'].indexOf(role) >= 0;
       // Supervisors get extra tabs: view-only team DTR + approvals.
       if (state.isSupervisor) {
         var nav = document.querySelector('nav.tabs');
@@ -207,6 +210,7 @@
         go('profile');
         pollNotifs();
         setInterval(pollNotifs, 45000);
+        showBulletinPopup();
       });
     });
 
@@ -567,6 +571,118 @@
       document.getElementById('schPrev').onclick = function () { schedState.start = isoAddDays(b.weekStart, -7); viewSchedule(); };
       document.getElementById('schNext').onclick = function () { schedState.start = isoAddDays(b.weekStart, 7); viewSchedule(); };
       document.getElementById('schToday').onclick = function () { schedState.start = null; viewSchedule(); };
+    }
+
+    // ---- Bulletin board ----
+    var BULLETIN_META = {
+      announcement: { label: 'Announcement', color: '#2563eb' },
+      event: { label: 'Event', color: '#0a7d33' },
+      holiday: { label: 'Holiday', color: '#d97706' },
+      memo: { label: 'Memo', color: '#7c3aed' }
+    };
+    function bulletinCard(b) {
+      var m = BULLETIN_META[b.category] || BULLETIN_META.announcement;
+      var when = b.eventDate ? ('<div class="muted" style="font-size:12px;margin-top:2px">📅 ' + esc(b.eventDate) + '</div>') : '';
+      return '<div style="border:1px solid #e2e8f0;border-left:4px solid ' + m.color + ';border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+        '<span class="badge" style="background:' + m.color + ';color:#fff">' + m.label + '</span>' +
+        (b.pinned ? '<span class="badge" style="background:#fee2e2;color:#b91c1c">📌 Pinned</span>' : '') +
+        '<b>' + esc(b.title) + '</b></div>' + when +
+        (b.body ? '<div style="margin-top:6px;white-space:pre-wrap">' + esc(b.body) + '</div>' : '') +
+        '<div class="muted" style="font-size:11px;margin-top:6px">Posted by ' + esc(b.authorName || 'HR') + ' • ' + esc((b.createdAt || '').slice(0, 10)) + '</div>' +
+        '</div>';
+    }
+    // Pop up any unread bulletins immediately after login.
+    function showBulletinPopup() {
+      api('/api/me/bulletins').then(function (r) {
+        var all = (r.body && r.body.bulletins) || [];
+        var unread = all.filter(function (b) { return b.unread; });
+        if (!unread.length) return;
+        var back = document.createElement('div');
+        back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;max-width:560px;width:100%;max-height:85vh;overflow:auto;border-radius:12px;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.3)';
+        box.innerHTML = '<h3 style="margin:0 0 4px;color:#17408B">📢 Bulletin Board</h3>' +
+          '<p class="muted" style="margin:0 0 14px">' + unread.length + ' new ' + (unread.length > 1 ? 'posts' : 'post') + ' from HR / Payroll.</p>' +
+          unread.map(bulletinCard).join('') +
+          '<div style="text-align:right;margin-top:8px"><button class="btn" id="blkOk">Got it</button></div>';
+        back.appendChild(box);
+        document.body.appendChild(back);
+        document.getElementById('blkOk').onclick = function () {
+          api('/api/me/bulletins/ack', { method: 'POST', body: JSON.stringify({ ids: unread.map(function (b) { return b.id; }) }) });
+          document.body.removeChild(back);
+        };
+      });
+    }
+    function viewBulletin() {
+      document.getElementById('view').innerHTML =
+        (state.canPostBulletin ? '<div class="card"><h2>Post to the Bulletin Board</h2><div class="in" id="blkCompose"></div></div>' : '') +
+        '<div class="card"><h2>Bulletin Board</h2><div class="in" id="blkList">Loading…</div></div>' +
+        (state.canPostBulletin ? '<div class="card"><h2>My Posts</h2><div class="in scroll" id="blkManage">Loading…</div></div>' : '');
+      if (state.canPostBulletin) renderBulletinCompose();
+      api('/api/me/bulletins').then(function (r) {
+        var all = (r.body && r.body.bulletins) || [];
+        document.getElementById('blkList').innerHTML = all.length ? all.map(bulletinCard).join('') : '<p class="muted">No announcements right now.</p>';
+        // Acking here too, since the employee has now seen them.
+        var unread = all.filter(function (b) { return b.unread; }).map(function (b) { return b.id; });
+        if (unread.length) api('/api/me/bulletins/ack', { method: 'POST', body: JSON.stringify({ ids: unread }) });
+      });
+      if (state.canPostBulletin) loadBulletinManage();
+    }
+    function renderBulletinCompose() {
+      document.getElementById('blkCompose').innerHTML =
+        '<div class="grid2">' +
+        '<label>Type<select id="blkCat"><option value="announcement">Announcement</option><option value="event">Event</option><option value="holiday">Holiday</option><option value="memo">Memo</option></select></label>' +
+        '<label>Event/Holiday date (optional)<input type="date" id="blkDate"></label>' +
+        '<label>Show until (optional)<input type="date" id="blkEnds"></label>' +
+        '<label style="display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="blkPin"> Pin to top</label>' +
+        '</div>' +
+        '<label>Title<input id="blkTitle" style="width:100%" maxlength="160"></label>' +
+        '<label>Details<textarea id="blkBody" rows="3" style="width:100%"></textarea></label>' +
+        '<button class="btn" id="blkPost" style="margin-top:8px">Post</button><span id="blkMsg" class="msg"></span>';
+      document.getElementById('blkPost').onclick = function () {
+        var msg = document.getElementById('blkMsg');
+        var title = document.getElementById('blkTitle').value.trim();
+        if (!title) { msg.textContent = '  Enter a title.'; msg.className = 'msg err'; return; }
+        var payload = { title: title, body: document.getElementById('blkBody').value,
+          category: document.getElementById('blkCat').value, eventDate: document.getElementById('blkDate').value || null,
+          endsAt: document.getElementById('blkEnds').value || null, pinned: document.getElementById('blkPin').checked };
+        api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+          if (!r.ok) { msg.textContent = '  ' + (r.body.error || 'Could not post.'); msg.className = 'msg err'; return; }
+          msg.textContent = '  ✓ Posted'; msg.className = 'msg ok';
+          document.getElementById('blkTitle').value = ''; document.getElementById('blkBody').value = '';
+          document.getElementById('blkDate').value = ''; document.getElementById('blkEnds').value = ''; document.getElementById('blkPin').checked = false;
+          viewBulletin();
+        });
+      };
+    }
+    function loadBulletinManage() {
+      api('/api/admin/bulletins').then(function (r) {
+        var rows = (r.body && r.body.bulletins) || [];
+        var el = document.getElementById('blkManage');
+        if (!el) return;
+        if (!rows.length) { el.innerHTML = '<p class="muted">You haven\'t posted anything yet.</p>'; return; }
+        el.innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' +
+          rows.map(function (b) {
+            return '<tr><td>' + esc(b.title) + (b.pinned ? ' 📌' : '') + '</td><td>' + esc((BULLETIN_META[b.category] || {}).label || b.category) +
+              '</td><td>' + (b.active ? '<span class="badge ok">active</span>' : '<span class="badge">hidden</span>') + '</td>' +
+              '<td><button class="btn sm ghost" data-blk-toggle="' + b.id + '" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button> ' +
+              '<button class="btn sm ghost" data-blk-del="' + b.id + '">Delete</button></td></tr>';
+          }).join('') + '</tbody></table>';
+        el.querySelectorAll('[data-blk-toggle]').forEach(function (btn) {
+          btn.onclick = function () {
+            api('/api/admin/bulletins/' + btn.dataset.blkToggle, { method: 'POST', body: JSON.stringify({ active: btn.dataset.active !== '1' }) })
+              .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } loadBulletinManage(); });
+          };
+        });
+        el.querySelectorAll('[data-blk-del]').forEach(function (btn) {
+          btn.onclick = function () {
+            if (!confirm('Delete this bulletin?')) return;
+            api('/api/admin/bulletins/' + btn.dataset.blkDel, { method: 'DELETE' })
+              .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } viewBulletin(); });
+          };
+        });
+      });
     }
 
     var leaveState = { month: null, sel: {}, win: { openDay: 21, manualOpen: false }, today: new Date(), creditsRemaining: 0 };

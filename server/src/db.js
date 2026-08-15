@@ -181,6 +181,36 @@ CREATE INDEX IF NOT EXISTS idx_docs_code ON documents(subject_employee_code);
 CREATE INDEX IF NOT EXISTS idx_docs_leave ON documents(leave_request_id);
 `);
 
+// Bulletin board: HR / payroll announcements, upcoming events, holidays and
+// memos posted by admins / supervisors. Shown to employees as a login pop-up and
+// in a Bulletin tab. A per-user ack table tracks who has already seen each post
+// so it only pops up until dismissed.
+db.exec(`
+CREATE TABLE IF NOT EXISTS bulletins (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT 'announcement', -- announcement | event | holiday | memo
+  event_date TEXT,           -- optional date the event/holiday falls on
+  ends_at TEXT,              -- optional last day to show it (after this it stops appearing)
+  pinned INTEGER NOT NULL DEFAULT 0,
+  location_id TEXT,          -- null = all locations
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER,
+  author_name TEXT DEFAULT '',
+  author_role TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bulletins_active ON bulletins(active, ends_at);
+
+CREATE TABLE IF NOT EXISTS bulletin_acks (
+  bulletin_id INTEGER NOT NULL REFERENCES bulletins(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (bulletin_id, user_id)
+);
+`);
+
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.
 db.exec(`
