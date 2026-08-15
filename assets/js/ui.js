@@ -211,15 +211,31 @@
         stat('Loan Balance', money(loanBal), '📉') +
       '</div>';
 
+    // Payroll periods, filtered by a per-month dropdown so the list stays short
+    // (each month shows its own cutoffs and per-location periods).
     var periods = periodsChrono(scopePeriods(S.list('periods')));
-    var periodRows = periods.length ? periods.map(function (p) {
+    function pMonthKey(p) { return String(p.payDate || p.endDate || p.startDate || '').slice(0, 7); }
+    function monthLabel(k) { var q = k.split('-'); return (MONTHS[(+q[1]) - 1] || '') + ' ' + q[0]; }
+    var months = [], seenM = {};
+    periods.forEach(function (p) { var k = pMonthKey(p); if (k && !seenM[k]) { seenM[k] = 1; months.push(k); } });
+    months.sort(); months.reverse(); // newest month first
+    var curKey = todayISO().slice(0, 7);
+    if (!state.dashMonth || (state.dashMonth !== 'all' && months.indexOf(state.dashMonth) < 0)) {
+      state.dashMonth = months.indexOf(curKey) >= 0 ? curKey : (months[0] || curKey);
+    }
+    var shown = periods.filter(function (p) { return state.dashMonth === 'all' || pMonthKey(p) === state.dashMonth; });
+    var periodRows = shown.length ? shown.map(function (p) {
       return '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.startDate) + ' → ' + esc(p.endDate) +
         '</td><td>' + esc(p.frequency) + '</td><td><span class="badge ' +
         (p.status === 'finalized' ? 'badge-ok' : 'badge-draft') + '">' + esc(p.status) + '</span></td></tr>';
-    }).join('') : '<tr><td colspan="4" class="muted">No payroll periods yet.</td></tr>';
+    }).join('') : '<tr><td colspan="4" class="muted">No payroll periods for this month.</td></tr>';
+    var monthPicker = '<div style="margin-bottom:10px"><label>Month: <select id="dashMonth" style="max-width:220px">' +
+      months.map(function (k) { return '<option value="' + k + '"' + (k === state.dashMonth ? ' selected' : '') + '>' + esc(monthLabel(k)) + '</option>'; }).join('') +
+      '<option value="all"' + (state.dashMonth === 'all' ? ' selected' : '') + '>All months</option></select></label></div>';
 
     v.innerHTML = stats +
       card('Payroll Periods',
+        monthPicker +
         '<table class="tbl"><thead><tr><th>Name</th><th>Coverage</th><th>Frequency</th><th>Status</th></tr></thead><tbody>' +
         periodRows + '</tbody></table>') +
       card('Getting Started',
@@ -230,6 +246,8 @@
         '<li>Go to <b>Run Payroll</b> to compute, review, print payslips and finalize.</li>' +
         '</ol><p class="disclaimer">⚠️ Statutory tables (SSS, PhilHealth, Pag-IBIG, BIR) change periodically. ' +
         'Review the values under <b>Statutory Settings</b> against the latest official circulars before each run.</p>');
+    var dm = v.querySelector('#dashMonth');
+    if (dm) dm.addEventListener('change', function () { state.dashMonth = dm.value; viewDashboard(v); });
   }
   function stat(label, val, ico) {
     return '<div class="stat"><div class="stat-ico">' + ico + '</div><div>' +
