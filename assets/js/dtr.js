@@ -391,6 +391,49 @@
     return out;
   }
 
+  /* Import a monthly-schedule template (for bulk editing employees' monthly grids).
+   * Expected headers (case-insensitive): EmployeeCode, Date, TimeIn, TimeOut.
+   * Extra columns (EmployeeName, Weekday) are ignored. Returns:
+   *   { byCode: { CODE: { "YYYY-MM": { "<day>": {in,out} } } }, invalid: n }
+   * Every (employee, month) that appears in the file is included — even with all
+   * days blank — so the caller can treat that month as configured (blank = rest).
+   */
+  function importScheduleCsv(text) {
+    var rows = parseCSV(text);
+    if (!rows.length) return { byCode: {}, invalid: 0 };
+    var header = rows[0].map(function (h) { return h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); });
+    function idx() { for (var a = 0; a < arguments.length; a++) { var j = header.indexOf(arguments[a]); if (j >= 0) return j; } return -1; }
+    var iCode = idx('employeecode', 'code', 'empid', 'id');
+    var iDate = idx('date');
+    var iIn = idx('timein', 'in');
+    var iOut = idx('timeout', 'out');
+    function normHM(s) {
+      s = String(s || '').trim();
+      if (!s) return '';
+      var m = /^(\d{1,2}):(\d{2})$/.exec(s);
+      if (!m || +m[1] > 23 || +m[2] > 59) return null; // invalid
+      return (m[1].length < 2 ? '0' + m[1] : m[1]) + ':' + m[2];
+    }
+    var byCode = {}, invalid = 0;
+    for (var r = 1; r < rows.length; r++) {
+      var row = rows[r];
+      var code = (iCode >= 0 ? row[iCode] : '').trim();
+      var rawDate = (iDate >= 0 ? row[iDate] : '').trim();
+      if (!code || !rawDate) continue;
+      var d = normaliseDate(rawDate);
+      if (!d || d.length < 10) continue;
+      var ym = d.slice(0, 7), day = String(parseInt(d.slice(8, 10), 10));
+      var inV = iIn >= 0 ? normHM(row[iIn]) : '';
+      var outV = iOut >= 0 ? normHM(row[iOut]) : '';
+      if (inV === null) { inV = ''; invalid++; }
+      if (outV === null) { outV = ''; invalid++; }
+      byCode[code] = byCode[code] || {};
+      byCode[code][ym] = byCode[code][ym] || {}; // mark this month present (even if all blank)
+      if (inV || outV) byCode[code][ym][day] = { in: inV, out: outV };
+    }
+    return { byCode: byCode, invalid: invalid };
+  }
+
   function truthy(v) {
     v = String(v || '').trim().toLowerCase();
     return v === '1' || v === 'y' || v === 'yes' || v === 'true' || v === 'x';
@@ -565,6 +608,7 @@
     computeDTR: computeDTR,
     parseCSV: parseCSV,
     importDTRCsv: importDTRCsv,
+    importScheduleCsv: importScheduleCsv,
     importBiometricCsv: importBiometricCsv,
     normaliseDate: normaliseDate
   };
