@@ -507,10 +507,12 @@
         field('Employment Status',
           select('employmentStatus', [['probationary','Probationary'],['regular','Regular'],['contractual','Contractual']], emp.employmentStatus || 'probationary') +
           '<small class="hint">Regular employees are entitled to Service Incentive Leave.</small>') +
-        field('Employment Type', select('employmentType', ['monthly', 'daily', 'hourly'], emp.employmentType)) +
+        field('Employment Type', select('employmentType',
+          [['monthly', 'Monthly'], ['daily', 'Daily'], ['hourly', 'Hourly'], ['output', 'Field / Output (per day worked)']], emp.employmentType)) +
         field('Basic Salary / Rate',
           '<input name="basicSalary" type="number" step="0.01" value="' + (emp.basicSalary || '') + '">' +
-          '<small class="hint">Monthly basic for "monthly"; daily rate for "daily"; hourly rate for "hourly".</small>') +
+          '<small class="hint">Monthly basic for "monthly"; daily rate for "daily"; hourly rate for "hourly"; ' +
+          'for "Field / Output" it is the <b>fixed rate paid per day worked</b> (no time in/out).</small>') +
         field('Working-Days Factor (per year)',
           '<input name="dailyRateFactor" type="number" value="' + (emp.dailyRateFactor || 313) + '">' +
           '<small class="hint">313 (6-day wk), 261 (5-day wk), or 365 (with rest-day pay).</small>') +
@@ -711,9 +713,11 @@
 
     var byEmp = scopeEmps(S.list('employees')).map(function (e) {
       var days = dtr[e.id] || [];
-      var sched = (e.schedTimeIn && e.schedTimeOut)
-        ? esc(e.schedTimeIn + '–' + e.schedTimeOut)
-        : '<span class="muted">not set</span>';
+      var sched = e.employmentType === 'output'
+        ? '<span class="muted">Field / output</span>'
+        : (e.schedTimeIn && e.schedTimeOut)
+          ? esc(e.schedTimeIn + '–' + e.schedTimeOut)
+          : '<span class="muted">not set</span>';
       return '<tr><td>' + esc(e.code) + '</td><td>' + esc(e.lastName + ', ' + e.firstName) +
         '</td><td>' + sched + '</td>' +
         '<td>' + days.length + ' day(s)</td><td class="row-actions">' +
@@ -892,8 +896,22 @@
   function dtrForm(pid, empId) {
     var emp = S.find('employees', empId);
     var period = S.find('periods', pid);
+    var isOutput = emp.employmentType === 'output';
     var days = ((S.db.dtr[pid] || {})[empId] || []).slice();
-    function rowHtml(d, i) {
+    // Field / output-based employees: no time in/out — just mark the day worked.
+    function rowHtmlOutput(d, i) {
+      d = d || {};
+      return '<tr data-i="' + i + '">' +
+        '<td><input name="date" type="date" value="' + esc(d.date || '') + '">' +
+        (d.date ? '<div class="sub">' + weekdayName(d.date) + '</div>' : '') + '</td>' +
+        '<td style="text-align:center"><input name="worked" type="checkbox"' + (d.worked ? ' checked' : '') + '></td>' +
+        '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
+        '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
+        '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
+        '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
+        '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
+    }
+    function rowHtmlTime(d, i) {
       d = d || {};
       return '<tr data-i="' + i + '">' +
         '<td><input name="date" type="date" value="' + esc(d.date || '') + '">' +
@@ -907,18 +925,25 @@
         '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
         '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
     }
+    var rowHtml = isOutput ? rowHtmlOutput : rowHtmlTime;
     // Auto-populate a row for every date in the coverage when nothing exists yet.
     if (!days.length && period && period.startDate && period.endDate) {
       days = coverageDays(period, emp);
     }
     if (!days.length) days.push({});
+    var header = isOutput
+      ? '<tr><th>Date</th><th>Worked</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr>'
+      : '<tr><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr>';
+    var intro = isOutput
+      ? 'This is a <b>field / output-based</b> employee (paid ' + money(emp.basicSalary) + ' per day worked). ' +
+        'Tick <b>Worked</b> for each day of field work — no time in/out needed. ' +
+        'Tick <b>Rest</b>/<b>Absent</b>, or pick a <b>Leave</b> type as usual. Working a rest day or holiday still earns the premium.'
+      : 'Just enter <b>In/Out</b> times, or tick <b>Rest</b> / <b>Absent</b>, or pick a <b>Leave</b> type (SL / VL / EL). Rest days are pre-ticked from the employee\'s rest day.';
     var body =
       '<p class="muted">Dates below are auto-filled from the period coverage' +
       (period && period.startDate ? ' (' + esc(period.startDate) + ' to ' + esc(period.endDate) + ')' : '') +
-      '. Just enter <b>In/Out</b> times, or tick <b>Rest</b> / <b>Absent</b>, or pick a <b>Leave</b> type (SL / VL / EL). ' +
-      'Rest days are pre-ticked from the employee\'s rest day.</p>' +
-      '<div class="dtr-scroll"><table class="tbl dtr-tbl"><thead><tr><th>Date</th><th>In</th><th>Out</th>' +
-      '<th>Break</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr></thead>' +
+      '. ' + intro + '</p>' +
+      '<div class="dtr-scroll"><table class="tbl dtr-tbl"><thead>' + header + '</thead>' +
       '<tbody id="dtrRows">' + days.map(rowHtml).join('') + '</tbody></table></div>' +
       '<button class="btn-sm" id="dtrAddRow" type="button">+ Add Day</button>' +
       '<button class="btn-sm" id="dtrFillDates" type="button">↻ Re-fill coverage dates</button>';
@@ -927,18 +952,26 @@
       form.querySelectorAll('#dtrRows tr').forEach(function (tr) {
         var g = function (n) { var el = tr.querySelector('[name=' + n + ']'); return el; };
         var date = g('date').value;
-        var tin = g('timeIn').value, tout = g('timeOut').value;
         var leaveType = g('leaveType').value;
         var restDay = g('restDay').checked, absent = g('absent').checked;
-        // Skip completely empty rows (no date, no punches, no flags).
-        if (!date && !tin && !tout && !leaveType && !restDay && !absent) return;
-        out.push({
-          date: date, timeIn: tin, timeOut: tout,
-          breakMins: parseInt(g('breakMins').value, 10) || 0,
-          dayType: g('dayType').value,
-          restDay: restDay, absent: absent,
-          leaveType: leaveType, leavePaid: !!leaveType
-        });
+        if (isOutput) {
+          var worked = g('worked').checked;
+          // Skip completely empty rows.
+          if (!date && !worked && !leaveType && !restDay && !absent) return;
+          out.push({ date: date, worked: worked, dayType: g('dayType').value,
+            restDay: restDay, absent: absent, leaveType: leaveType, leavePaid: !!leaveType });
+        } else {
+          var tin = g('timeIn').value, tout = g('timeOut').value;
+          // Skip completely empty rows (no date, no punches, no flags).
+          if (!date && !tin && !tout && !leaveType && !restDay && !absent) return;
+          out.push({
+            date: date, timeIn: tin, timeOut: tout,
+            breakMins: parseInt(g('breakMins').value, 10) || 0,
+            dayType: g('dayType').value,
+            restDay: restDay, absent: absent,
+            leaveType: leaveType, leavePaid: !!leaveType
+          });
+        }
       });
       S.db.dtr[pid] = S.db.dtr[pid] || {};
       if (out.length) S.db.dtr[pid][empId] = out; else delete S.db.dtr[pid][empId];
@@ -955,7 +988,7 @@
     });
     qs('#dtrFillDates').addEventListener('click', function () {
       if (!period || !period.startDate || !period.endDate) { alert('Set the period start and end dates first.'); return; }
-      if (rowsEl.querySelector('input[name=timeIn]') &&
+      if ((rowsEl.querySelector('input[name=timeIn]') || rowsEl.querySelector('input[name=worked]')) &&
           !confirm('Replace the current rows with a fresh set of coverage dates? Any entries here will be cleared.')) return;
       var fresh = coverageDays(period, emp);
       counter = fresh.length;
@@ -978,10 +1011,14 @@
     var end = new Date(period.endDate + 'T00:00:00');
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return out;
     var restDow = emp && emp.restDay != null ? parseInt(emp.restDay, 10) : -1;
+    var isOutput = emp && emp.employmentType === 'output';
     var guard = 0;
     for (var dt = new Date(start); dt <= end && guard < 400; dt.setDate(dt.getDate() + 1), guard++) {
       var iso = dt.getFullYear() + '-' + pad2(dt.getMonth() + 1) + '-' + pad2(dt.getDate());
-      out.push({ date: iso, dayType: 'regular', restDay: dt.getDay() === restDow });
+      var rest = dt.getDay() === restDow;
+      // Field employees: pre-mark ordinary (non-rest) days as worked; the admin
+      // just unticks any day they were actually off.
+      out.push({ date: iso, dayType: 'regular', restDay: rest, worked: isOutput ? !rest : undefined });
     }
     return out;
   }

@@ -172,6 +172,22 @@
 
     if (day.absent) return result;
 
+    // Output-based (field) employees have no time in/out — they are paid a fixed
+    // rate per day worked. A day flagged "worked" counts as one full standard day
+    // (priced at the daily rate via the day-type multiplier); no late / undertime
+    // / overtime / night-differential applies. Days not worked fall through with
+    // zero minutes, so unworked paid leave and unworked regular holidays are still
+    // handled by the summary/payroll exactly like other employees.
+    if (opts.outputBased) {
+      var workedFlag = day.worked === true || truthy(day.worked);
+      if (workedFlag) {
+        var req = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
+        result.workedMinutes = req;
+        result.regularMinutes = req;
+      }
+      return result;
+    }
+
     var inM = toMinutes(day.timeIn);
     var outM = toMinutes(day.timeOut);
     if (inM == null || outM == null) {
@@ -363,6 +379,7 @@
     var iSched = idx('scheduledin', 'schedin', 'shiftstart');
     var iSchedOut = idx('scheduledout', 'schedout', 'shiftend');
     var iAbsent = idx('absent');
+    var iWorked = idx('worked', 'present'); // output/field employees: day worked (no punches)
     var iLeave = idx('paidleave', 'leave');
     var iLeaveType = idx('leavetype', 'leavecode');
     var iReq = idx('requiredhours', 'requiredhrs', 'reqhours');
@@ -382,6 +399,7 @@
         scheduledIn: iSched >= 0 ? row[iSched].trim() : undefined,
         scheduledOut: iSchedOut >= 0 ? row[iSchedOut].trim() : undefined,
         absent: iAbsent >= 0 ? truthy(row[iAbsent]) : false,
+        worked: iWorked >= 0 ? truthy(row[iWorked]) : undefined,
         leaveType: normaliseLeave(iLeaveType >= 0 ? row[iLeaveType] : ''),
         leavePaid: (iLeaveType >= 0 && normaliseLeave(row[iLeaveType])) ? true : (iLeave >= 0 ? truthy(row[iLeave]) : false),
         requiredMinutes: iReq >= 0 && row[iReq].trim() !== '' ? Math.round(parseFloat(row[iReq]) * 60) : undefined
