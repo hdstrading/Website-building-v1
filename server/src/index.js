@@ -289,20 +289,22 @@ function periodsForMonth(y, m, loc) {
     startDate: isoYMD(y, m, 11), endDate: isoYMD(y, m, 25), payDate: isoYMD(y, m, payD) });
   return [p1, p2];
 }
-// Ensure the current and next month's cutoff periods exist (idempotent by id).
-// With locations configured, generate one set per location; otherwise a shared set.
+// Ensure ONLY the current cutoff of the current month exists (idempotent by id,
+// so it never duplicates). The current cutoff is the 15th when today is on/before
+// the 15th, otherwise the 30th — one cutoff, this month only, no look-ahead. With
+// locations configured, that single cutoff is ensured once per location; otherwise
+// a single shared cutoff. (Admins can still create any other period manually.)
 function ensurePeriods(data, today) {
   data.periods = data.periods || [];
   const have = {}; data.periods.forEach(function (p) { have[p.id] = true; });
   const y = today.getFullYear(), m = today.getMonth() + 1;
-  const months = [[y, m], [m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1]];
+  const idx = today.getDate() <= 15 ? 0 : 1; // 0 = 15th cutoff, 1 = 30th cutoff
   const locs = (data.meta && data.meta.locations) || [];
   const targets = locs.length ? locs : [null];
   let changed = false;
-  months.forEach(function (ym) {
-    targets.forEach(function (loc) {
-      periodsForMonth(ym[0], ym[1], loc).forEach(function (p) { if (!have[p.id]) { data.periods.push(p); changed = true; } });
-    });
+  targets.forEach(function (loc) {
+    const p = periodsForMonth(y, m, loc)[idx];
+    if (!have[p.id]) { data.periods.push(p); changed = true; }
   });
   return changed;
 }
