@@ -811,6 +811,24 @@ app.post('/api/admin/users/:id/status', adminMgmt, requireUnscoped, (req, res) =
   res.json({ ok: true });
 });
 
+// Permanently delete a user account. This removes the login and its portal data
+// (leave/loan/overtime requests, notifications, profile photo, pending 201-change
+// requests — all cascade). The employee's 201 record and finalized payrolls live
+// in the company document and are NOT touched, so payroll history is preserved.
+app.delete('/api/admin/users/:id', adminMgmt, requireUnscoped, (req, res) => {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  if (req.user.id === user.id) return res.status(400).json({ error: 'You cannot delete your own account.' });
+  // Never remove the last Super Admin.
+  if (user.role === 'superadmin') {
+    const supers = db.prepare("SELECT COUNT(*) c FROM users WHERE role = 'superadmin'").get().c;
+    if (supers <= 1) return res.status(400).json({ error: 'There must be at least one Super Admin.' });
+  }
+  db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+  audit(req, 'delete', 'user', 'Deleted account ' + user.email + (user.employee_code ? ' (' + user.employee_code + ')' : ''));
+  res.json({ ok: true });
+});
+
 // Read-only leave feed for the whole-month Leave Calendar view (all admin-app
 // roles, including auditors and finance). Location-scoped like the other feeds.
 app.get('/api/leave-calendar', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {

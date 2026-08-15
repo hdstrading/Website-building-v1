@@ -130,7 +130,8 @@
             '<td><span class="acc-badge ' + u.status + '">' + u.status + '</span></td>' +
             '<td class="acc-actions"><button class="acc-btn ghost u-email">Edit email</button>' +
             '<button class="acc-btn ghost u-toggle">' + (u.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
-            '<button class="acc-btn ghost u-pw">Reset password</button></td></tr>';
+            '<button class="acc-btn ghost u-pw">Reset password</button>' +
+            '<button class="acc-btn ghost u-del" style="color:#b91c1c">Delete</button></td></tr>';
         }).join('') + '</tbody></table>';
       body.querySelectorAll('tr[data-uid]').forEach(function (tr) {
         var uid = tr.dataset.uid;
@@ -164,6 +165,15 @@
             .then(function (r) {
               if (!r.ok) { alert(r.body.error || 'Failed'); return; }
               alert(r.body.password ? ('Temporary password: ' + r.body.password + '\n\nShare it with the user; they can change it after signing in.') : 'Password updated.');
+            });
+        };
+        tr.querySelector('.u-del').onclick = function () {
+          var who = tr.querySelector('.acc-muted').textContent.split(' • ')[0];
+          if (!confirm('Permanently DELETE this account (' + who + ')?\n\nThis removes their login and portal data (leave/loan/overtime requests, notifications, profile photo). The employee\'s 201 record and finalized payrolls are kept.\n\nThis cannot be undone. To only block sign-in, use Disable instead.')) return;
+          api('/api/admin/users/' + uid, { method: 'DELETE' })
+            .then(function (r) {
+              if (!r.ok) { alert(r.body.error || 'Could not delete this account.'); return; }
+              renderTab('users');
             });
         };
       });
