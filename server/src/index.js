@@ -13,7 +13,10 @@ const totp = require('./totp');
 
 const app = express();
 app.set('trust proxy', true); // behind Caddy/Nginx: honour X-Forwarded-Proto
-app.use(express.json({ limit: '5mb' }));
+// Body limit must exceed the largest per-endpoint upload cap (base64 memo/document
+// files run to ~8 MB of characters) so those uploads reach the endpoint's own,
+// friendlier size check instead of being rejected here with a raw 413.
+app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 app.use(A.authenticate);
 
@@ -1732,11 +1735,20 @@ app.get('/api/me/bulletins', A.requireAuth, (req, res) => {
   res.json({ bulletins: rows.map(function (b) { return bulletinRow(b, !ack[b.id], ack[b.id]); }) });
 });
 
-// Mark bulletins as seen so they stop popping up on login.
+// Record acknowledgment ("I have read & understood") for bulletins the user can
+// actually see — active and in their location scope. Ignores anything else so the
+// read receipts stay accurate.
 app.post('/api/me/bulletins/ack', A.requireAuth, (req, res) => {
-  const ids = (req.body && req.body.ids) || [];
+  const ids = req.body && req.body.ids;
+  if (!Array.isArray(ids) || !ids.length) return res.json({ ok: true });
+  const loc = userLocationId(req);
   const ins = db.prepare('INSERT OR IGNORE INTO bulletin_acks (bulletin_id, user_id) VALUES (?, ?)');
-  ids.forEach(function (id) { if (Number(id)) ins.run(Number(id), req.user.id); });
+  ids.forEach(function (id) {
+    const n = Number(id);
+    if (!n) return;
+    const b = db.prepare('SELECT active, location_id FROM bulletins WHERE id = ?').get(n);
+    if (b && b.active && (!b.location_id || b.location_id === loc)) ins.run(n, req.user.id);
+  });
   res.json({ ok: true });
 });
 
@@ -1963,6 +1975,21 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.get('/app', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'app', 'index.html')));
 app.get('/portal', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'portal.html')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'login.html')));
+
+/* ================= ERROR HANDLER ================= */
+// Return JSON (not Express's default HTML) for body-parse failures, so the client
+// always gets a readable message — e.g. an over-limit upload or malformed JSON.
+app.use(function (err, req, res, next) {
+  if (res.headersSent) return next(err);
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'That upload is too large. Please use a smaller file.' });
+  }
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Malformed request.' });
+  }
+  console.error('Unhandled error:', err && err.message);
+  return res.status(500).json({ error: 'Server error.' });
+});
 
 /* ================= FIRST-RUN SUPERADMIN ================= */
 function seedSuperadmin() {
