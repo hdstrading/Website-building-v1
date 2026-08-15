@@ -237,6 +237,50 @@
   }
 
   /* ===================== EMPLOYEES ===================== */
+  // Build the bulk monthly-schedule template (CSV) for a month: one row per active
+  // (in-scope) employee per date, pre-filled from each employee's current effective
+  // schedule. A blank Time In/Out means a rest day.
+  function schedPad(n) { return (n < 10 ? '0' : '') + n; }
+  function csvCell(s) { s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+  function scheduleTemplateCsv(ym) {
+    var p = ym.split('-'), year = +p[0], mon = (+p[1]) - 1;
+    var daysIn = new Date(year, mon + 1, 0).getDate();
+    var WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var emps = scopeEmps(S.list('employees')).filter(function (e) { return e.active !== false; });
+    var lines = ['EmployeeCode,EmployeeName,Date,Weekday,TimeIn,TimeOut'];
+    emps.forEach(function (e) {
+      for (var day = 1; day <= daysIn; day++) {
+        var iso = year + '-' + schedPad(mon + 1) + '-' + schedPad(day);
+        var s = PH.dtr.scheduleForDate(e, iso);
+        var inV = s.off ? '' : (s.in || ''), outV = s.off ? '' : (s.out || '');
+        lines.push([csvCell(e.code), csvCell(((e.lastName || '') + ', ' + (e.firstName || '')).replace(/^, |, $/g, '')),
+          iso, WD[new Date(year, mon, day).getDay()], inV, outV].join(','));
+      }
+    });
+    return lines.join('\n');
+  }
+  // Apply a parsed schedule template to the employees' monthly grids. Each
+  // (employee, month) present in the file replaces that month entirely.
+  function applyScheduleImport(parsed) {
+    var codeMap = {};
+    S.list('employees').forEach(function (e) { if (e.code) codeMap[String(e.code).trim().toLowerCase()] = e; });
+    var matched = {}, months = {}, unmatched = [];
+    Object.keys(parsed.byCode).forEach(function (code) {
+      var emp = codeMap[code.trim().toLowerCase()];
+      if (!emp) { unmatched.push(code); return; }
+      emp.monthSchedule = emp.monthSchedule || {};
+      Object.keys(parsed.byCode[code]).forEach(function (ym) {
+        emp.monthSchedule[ym] = parsed.byCode[code][ym]; // month is now the source of truth
+        months[ym] = true;
+      });
+      // Drop any now-empty monthSchedule to keep the record tidy.
+      if (!Object.keys(emp.monthSchedule).length) delete emp.monthSchedule;
+      matched[emp.id] = true;
+      S.upsert('employees', emp);
+    });
+    return { employees: Object.keys(matched).length, months: Object.keys(months).length, unmatched: unmatched };
+  }
+
   function viewEmployees(v) {
     var hasLoc = locations().length > 0;
     var emps = scopeEmps(S.list('employees'));
@@ -264,7 +308,49 @@
       rows + '</tbody></table>',
       '<button class="btn" data-emp-add>+ Add Employee</button>');
 
+    var schMonth = new Date().toISOString().slice(0, 7);
+    v.innerHTML += card('Bulk Monthly Schedule',
+      '<p class="sub">Download a template for a month (pre-filled with each employee\'s current schedule), edit the ' +
+      '<b>Time In</b> / <b>Time Out</b> columns in Excel, then upload it to set everyone\'s schedule for that month at once. ' +
+      'A blank Time In/Out means a <b>rest day</b>. Uploading replaces each employee\'s schedule for the months in the file.</p>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">' +
+        '<label class="fld" style="max-width:200px"><span class="fld-label">Month</span><input type="month" id="schTplMonth" value="' + schMonth + '"></label>' +
+        '<button class="btn" id="schTplDl">Download template</button>' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">' +
+        '<input type="file" id="schTplFile" accept=".csv,text/csv">' +
+        '<button class="btn" id="schTplUp">Upload filled template</button>' +
+        '<span id="schTplMsg" class="msg"></span>' +
+      '</div>');
+
     v.querySelector('[data-emp-add]').addEventListener('click', function () { employeeForm(); });
+    v.querySelector('#schTplDl').addEventListener('click', function () {
+      var ym = v.querySelector('#schTplMonth').value || schMonth;
+      if (!scopeEmps(S.list('employees')).filter(function (e) { return e.active !== false; }).length) {
+        v.querySelector('#schTplMsg').textContent = 'No active employees to include.'; v.querySelector('#schTplMsg').className = 'msg err'; return;
+      }
+      downloadFile('schedule_template_' + ym + '.csv', scheduleTemplateCsv(ym), 'text/csv');
+    });
+    v.querySelector('#schTplUp').addEventListener('click', function () {
+      var file = v.querySelector('#schTplFile').files[0];
+      var msg = v.querySelector('#schTplMsg');
+      if (!file) { msg.textContent = 'Choose the filled template CSV first.'; msg.className = 'msg err'; return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var parsed = PH.dtr.importScheduleCsv(reader.result);
+          if (!Object.keys(parsed.byCode).length) { msg.className = 'msg err'; msg.textContent = 'No schedule rows found. Check the file has EmployeeCode, Date, TimeIn, TimeOut columns.'; return; }
+          var res = applyScheduleImport(parsed);
+          S.save();
+          msg.className = 'msg ok';
+          msg.textContent = 'Updated ' + res.employees + ' employee(s) across ' + res.months + ' month(s).' +
+            (parsed.invalid ? ' Skipped ' + parsed.invalid + ' invalid time value(s).' : '') +
+            (res.unmatched.length ? ' Unmatched codes: ' + res.unmatched.join(', ') : '');
+          renderView();
+        } catch (err) { msg.className = 'msg err'; msg.textContent = 'Import failed: ' + err.message; }
+      };
+      reader.readAsText(file);
+    });
     v.querySelectorAll('[data-emp-view]').forEach(function (b) {
       b.addEventListener('click', function () { view201(S.find('employees', b.dataset.empView)); });
     });
