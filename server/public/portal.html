@@ -580,17 +580,34 @@
       holiday: { label: 'Holiday', color: '#d97706' },
       memo: { label: 'Memo', color: '#7c3aed' }
     };
-    function bulletinCard(b) {
+    function readFileDataUrl(file) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(fr.result); };
+        fr.onerror = function () { reject(new Error('read')); };
+        fr.readAsDataURL(file);
+      });
+    }
+    // ackable: show an "I have read & understood" button (unread) or the ack stamp.
+    function bulletinCard(b, ackable) {
       var m = BULLETIN_META[b.category] || BULLETIN_META.announcement;
       var when = b.eventDate ? ('<div class="muted" style="font-size:12px;margin-top:2px">📅 ' + esc(b.eventDate) + '</div>') : '';
+      var file = b.hasFile ? ('<div style="margin-top:8px"><a class="btn sm ghost" href="/api/bulletin-file/' + b.id + '" target="_blank">📎 Open attached memo' + (b.fileName ? ' (' + esc(b.fileName) + ')' : '') + '</a></div>') : '';
+      var ackUI = '';
+      if (ackable) {
+        ackUI = b.unread
+          ? '<div style="margin-top:8px"><button class="btn sm" data-ack="' + b.id + '">I have read &amp; understood</button></div>'
+          : '<div class="muted" style="font-size:11px;margin-top:8px">✓ Acknowledged' + (b.ackedAt ? ' on ' + esc((b.ackedAt || '').slice(0, 10)) : '') + '</div>';
+      }
       return '<div style="border:1px solid #e2e8f0;border-left:4px solid ' + m.color + ';border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
         '<span class="badge" style="background:' + m.color + ';color:#fff">' + m.label + '</span>' +
         (b.pinned ? '<span class="badge" style="background:#fee2e2;color:#b91c1c">📌 Pinned</span>' : '') +
         '<b>' + esc(b.title) + '</b></div>' + when +
         (b.body ? '<div style="margin-top:6px;white-space:pre-wrap">' + esc(b.body) + '</div>' : '') +
+        file +
         '<div class="muted" style="font-size:11px;margin-top:6px">Posted by ' + esc(b.authorName || 'HR') + ' • ' + esc((b.createdAt || '').slice(0, 10)) + '</div>' +
-        '</div>';
+        ackUI + '</div>';
     }
     // Pop up any unread bulletins immediately after login.
     function showBulletinPopup() {
@@ -603,9 +620,10 @@
         var box = document.createElement('div');
         box.style.cssText = 'background:#fff;max-width:560px;width:100%;max-height:85vh;overflow:auto;border-radius:12px;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.3)';
         box.innerHTML = '<h3 style="margin:0 0 4px;color:#17408B">📢 Bulletin Board</h3>' +
-          '<p class="muted" style="margin:0 0 14px">' + unread.length + ' new ' + (unread.length > 1 ? 'posts' : 'post') + ' from HR / Payroll.</p>' +
-          unread.map(bulletinCard).join('') +
-          '<div style="text-align:right;margin-top:8px"><button class="btn" id="blkOk">Got it</button></div>';
+          '<p class="muted" style="margin:0 0 14px">' + unread.length + ' new ' + (unread.length > 1 ? 'posts' : 'post') + ' from HR / Payroll. ' +
+          'Tapping the button records your acknowledgment that you have read and understood ' + (unread.length > 1 ? 'them' : 'it') + '.</p>' +
+          unread.map(function (b) { return bulletinCard(b, false); }).join('') +
+          '<div style="text-align:right;margin-top:8px"><button class="btn" id="blkOk">I have read &amp; understood</button></div>';
         back.appendChild(box);
         document.body.appendChild(back);
         document.getElementById('blkOk').onclick = function () {
@@ -613,6 +631,9 @@
           document.body.removeChild(back);
         };
       });
+    }
+    function ackBulletin(id) {
+      api('/api/me/bulletins/ack', { method: 'POST', body: JSON.stringify({ ids: [id] }) }).then(viewBulletin);
     }
     function viewBulletin() {
       document.getElementById('view').innerHTML =
@@ -622,10 +643,10 @@
       if (state.canPostBulletin) renderBulletinCompose();
       api('/api/me/bulletins').then(function (r) {
         var all = (r.body && r.body.bulletins) || [];
-        document.getElementById('blkList').innerHTML = all.length ? all.map(bulletinCard).join('') : '<p class="muted">No announcements right now.</p>';
-        // Acking here too, since the employee has now seen them.
-        var unread = all.filter(function (b) { return b.unread; }).map(function (b) { return b.id; });
-        if (unread.length) api('/api/me/bulletins/ack', { method: 'POST', body: JSON.stringify({ ids: unread }) });
+        var el = document.getElementById('blkList');
+        // No silent acknowledgment — the employee must click to acknowledge each post.
+        el.innerHTML = all.length ? all.map(function (b) { return bulletinCard(b, true); }).join('') : '<p class="muted">No announcements right now.</p>';
+        el.querySelectorAll('[data-ack]').forEach(function (btn) { btn.onclick = function () { ackBulletin(btn.dataset.ack); }; });
       });
       if (state.canPostBulletin) loadBulletinManage();
     }
@@ -639,6 +660,7 @@
         '</div>' +
         '<label>Title<input id="blkTitle" style="width:100%" maxlength="160"></label>' +
         '<label>Details<textarea id="blkBody" rows="3" style="width:100%"></textarea></label>' +
+        '<label>Attach memo file (optional — PDF or Word)<input type="file" id="blkFile" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>' +
         '<button class="btn" id="blkPost" style="margin-top:8px">Post</button><span id="blkMsg" class="msg"></span>';
       document.getElementById('blkPost').onclick = function () {
         var msg = document.getElementById('blkMsg');
@@ -647,13 +669,16 @@
         var payload = { title: title, body: document.getElementById('blkBody').value,
           category: document.getElementById('blkCat').value, eventDate: document.getElementById('blkDate').value || null,
           endsAt: document.getElementById('blkEnds').value || null, pinned: document.getElementById('blkPin').checked };
-        api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+        var f = document.getElementById('blkFile').files[0];
+        var btn = document.getElementById('blkPost'); btn.disabled = true; msg.textContent = '  Posting…'; msg.className = 'msg';
+        var prep = f ? readFileDataUrl(f).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
+        prep.then(function () {
+          return api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) });
+        }).then(function (r) {
+          btn.disabled = false;
           if (!r.ok) { msg.textContent = '  ' + (r.body.error || 'Could not post.'); msg.className = 'msg err'; return; }
-          msg.textContent = '  ✓ Posted'; msg.className = 'msg ok';
-          document.getElementById('blkTitle').value = ''; document.getElementById('blkBody').value = '';
-          document.getElementById('blkDate').value = ''; document.getElementById('blkEnds').value = ''; document.getElementById('blkPin').checked = false;
           viewBulletin();
-        });
+        }).catch(function () { btn.disabled = false; msg.textContent = '  Could not read that file.'; msg.className = 'msg err'; });
       };
     }
     function loadBulletinManage() {
@@ -664,11 +689,13 @@
         if (!rows.length) { el.innerHTML = '<p class="muted">You haven\'t posted anything yet.</p>'; return; }
         el.innerHTML = '<table><thead><tr><th>Title</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' +
           rows.map(function (b) {
-            return '<tr><td>' + esc(b.title) + (b.pinned ? ' 📌' : '') + '</td><td>' + esc((BULLETIN_META[b.category] || {}).label || b.category) +
+            return '<tr><td>' + esc(b.title) + (b.pinned ? ' 📌' : '') + (b.hasFile ? ' 📎' : '') + '</td><td>' + esc((BULLETIN_META[b.category] || {}).label || b.category) +
               '</td><td>' + (b.active ? '<span class="badge ok">active</span>' : '<span class="badge">hidden</span>') + '</td>' +
-              '<td><button class="btn sm ghost" data-blk-toggle="' + b.id + '" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button> ' +
+              '<td><button class="btn sm ghost" data-blk-acks="' + b.id + '">Receipts</button> ' +
+              '<button class="btn sm ghost" data-blk-toggle="' + b.id + '" data-active="' + (b.active ? 1 : 0) + '">' + (b.active ? 'Hide' : 'Show') + '</button> ' +
               '<button class="btn sm ghost" data-blk-del="' + b.id + '">Delete</button></td></tr>';
           }).join('') + '</tbody></table>';
+        el.querySelectorAll('[data-blk-acks]').forEach(function (btn) { btn.onclick = function () { showAckModal(btn.dataset.blkAcks); }; });
         el.querySelectorAll('[data-blk-toggle]').forEach(function (btn) {
           btn.onclick = function () {
             api('/api/admin/bulletins/' + btn.dataset.blkToggle, { method: 'POST', body: JSON.stringify({ active: btn.dataset.active !== '1' }) })
@@ -682,6 +709,32 @@
               .then(function (r) { if (!r.ok) { alert(r.body.error || 'Failed'); } viewBulletin(); });
           };
         });
+      });
+    }
+    // Read receipts modal: who acknowledged and who is still pending.
+    function showAckModal(id) {
+      api('/api/admin/bulletins/' + id + '/acks').then(function (r) {
+        if (!r.ok) { alert(r.body.error || 'Could not load receipts.'); return; }
+        var d = r.body;
+        var ackRows = d.acknowledged.length
+          ? d.acknowledged.map(function (a) { return '<tr><td>' + esc(a.fullName || a.email) + (a.code ? ' <span class="muted">' + esc(a.code) + '</span>' : '') + '</td><td class="muted">' + esc((a.at || '').replace('T', ' ').slice(0, 16)) + '</td></tr>'; }).join('')
+          : '<tr><td colspan="2" class="muted">No one has acknowledged yet.</td></tr>';
+        var pendRows = d.pending.length
+          ? d.pending.map(function (p) { return '<tr><td>' + esc(p.fullName || p.email) + (p.code ? ' <span class="muted">' + esc(p.code) + '</span>' : '') + '</td></tr>'; }).join('')
+          : '<tr><td class="muted">Everyone has acknowledged. 🎉</td></tr>';
+        var back = document.createElement('div');
+        back.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;max-width:560px;width:100%;max-height:85vh;overflow:auto;border-radius:12px;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3)';
+        box.innerHTML = '<h3 style="margin:0 0 2px;color:#17408B">Read Receipts</h3>' +
+          '<p class="muted" style="margin:0 0 12px">' + esc(d.title || '') + ' — <b>' + d.count + ' of ' + d.total + '</b> acknowledged.</p>' +
+          '<h4 style="margin:8px 0 4px">Acknowledged</h4><table><thead><tr><th>Name</th><th>When</th></tr></thead><tbody>' + ackRows + '</tbody></table>' +
+          '<h4 style="margin:12px 0 4px">Pending</h4><table><tbody>' + pendRows + '</tbody></table>' +
+          '<div style="text-align:right;margin-top:12px"><button class="btn" id="ackClose">Close</button></div>';
+        back.appendChild(box);
+        document.body.appendChild(back);
+        document.getElementById('ackClose').onclick = function () { document.body.removeChild(back); };
+        back.addEventListener('click', function (e) { if (e.target === back) document.body.removeChild(back); });
       });
     }
 

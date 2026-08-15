@@ -1662,6 +1662,12 @@ app.get('/api/me/schedule', A.requireAuth, (req, res) => {
 
 /* ---- Bulletin board: HR/payroll announcements, events, holidays, memos ---- */
 const BULLETIN_CATS = { announcement: 1, event: 1, holiday: 1, memo: 1 };
+// Attachable memo file types (upload a hard-copy memo instead of retyping it).
+const BULLETIN_FILE_MIME = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc'
+};
 const bulletinPosters = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
 // The location a user belongs to (managers carry it on the account; employees on
 // their 201 record) — used to scope which bulletins they see.
@@ -1673,10 +1679,32 @@ function userLocationId(req) {
   }
   return null;
 }
-function bulletinRow(b, unread) {
+function bulletinRow(b, unread, ackedAt) {
   return { id: b.id, title: b.title, body: b.body, category: b.category, eventDate: b.event_date,
     endsAt: b.ends_at, pinned: !!b.pinned, locationId: b.location_id, active: !!b.active,
-    authorName: b.author_name, authorRole: b.author_role, createdBy: b.created_by, createdAt: b.created_at, unread: unread };
+    authorName: b.author_name, authorRole: b.author_role, createdBy: b.created_by, createdAt: b.created_at,
+    hasFile: !!b.file_data, fileName: b.file_name || '', fileMime: b.file_mime || '',
+    unread: unread, ackedAt: ackedAt || null };
+}
+// Effective location for every user (managers carry it on the account; employees
+// on their 201 record) — used to compute a bulletin's target audience.
+function effectiveUserLocations() {
+  const locByCode = {};
+  (getCompanyData().employees || []).forEach(function (e) { if (e.code) locByCode[e.code] = e.locationId || null; });
+  const map = {};
+  db.prepare('SELECT id, location_id, employee_code FROM users').all().forEach(function (u) {
+    map[u.id] = u.location_id || (u.employee_code ? (locByCode[u.employee_code] || null) : null);
+  });
+  return map;
+}
+// Validate + extract an attached memo file from a create/edit payload.
+// Returns { mime, name, data } on success, null when no file, or an Error message string.
+function bulletinFile(b) {
+  if (!b.dataUrl) return null;
+  const parsed = parseDataUrl(b.dataUrl);
+  if (!parsed || !BULLETIN_FILE_MIME[parsed.mime]) return { error: 'Attach a PDF or Word (DOC/DOCX) file.' };
+  if (parsed.b64.length > 8 * 1024 * 1024) return { error: 'That file is too large (max ~6 MB).' };
+  return { mime: parsed.mime, name: String(b.fileName || 'memo').slice(0, 200), data: parsed.b64 };
 }
 function canManageBulletin(req, b) {
   if (req.user.role === 'superadmin' || req.user.role === 'admin_payroll') {
@@ -1695,9 +1723,9 @@ app.get('/api/me/bulletins', A.requireAuth, (req, res) => {
     "ORDER BY pinned DESC, COALESCE(event_date, substr(created_at,1,10)) DESC, id DESC"
   ).all(today).filter(function (b) { return !b.location_id || b.location_id === loc; });
   const ack = {};
-  db.prepare('SELECT bulletin_id FROM bulletin_acks WHERE user_id = ?').all(req.user.id)
-    .forEach(function (a) { ack[a.bulletin_id] = 1; });
-  res.json({ bulletins: rows.map(function (b) { return bulletinRow(b, !ack[b.id]); }) });
+  db.prepare('SELECT bulletin_id, created_at FROM bulletin_acks WHERE user_id = ?').all(req.user.id)
+    .forEach(function (a) { ack[a.bulletin_id] = a.created_at; });
+  res.json({ bulletins: rows.map(function (b) { return bulletinRow(b, !ack[b.id], ack[b.id]); }) });
 });
 
 // Mark bulletins as seen so they stop popping up on login.
@@ -1717,11 +1745,14 @@ app.post('/api/admin/bulletins', bulletinPosters, (req, res) => {
   // Supervisors (and location-scoped admins) can only post to their own location;
   // an unscoped central admin may target a specific location or all locations.
   const locationId = req.user.location_id ? req.user.location_id : (b.locationId || null);
+  const file = bulletinFile(b);
+  if (file && file.error) return res.status(400).json({ error: file.error });
   const info = db.prepare(
-    "INSERT INTO bulletins (title, body, category, event_date, ends_at, pinned, location_id, created_by, author_name, author_role) " +
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "INSERT INTO bulletins (title, body, category, event_date, ends_at, pinned, location_id, created_by, author_name, author_role, file_mime, file_name, file_data) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
   ).run(title, String(b.body || '').slice(0, 5000), category, b.eventDate || null, b.endsAt || null,
-    b.pinned ? 1 : 0, locationId, req.user.id, req.user.full_name || req.user.email, req.user.role);
+    b.pinned ? 1 : 0, locationId, req.user.id, req.user.full_name || req.user.email, req.user.role,
+    file ? file.mime : null, file ? file.name : null, file ? file.data : null);
   audit(req, 'create', 'bulletin', category + ': ' + title);
   res.json({ ok: true, id: info.lastInsertRowid });
 });
@@ -1742,14 +1773,61 @@ app.post('/api/admin/bulletins/:id', bulletinPosters, (req, res) => {
   const category = BULLETIN_CATS[b.category] ? b.category : cur.category;
   const title = b.title !== undefined ? String(b.title).trim() : cur.title;
   if (!title) return res.status(400).json({ error: 'A title is required.' });
-  db.prepare("UPDATE bulletins SET title=?, body=?, category=?, event_date=?, ends_at=?, pinned=?, active=? WHERE id=?")
+  // File: replace when a new one is attached, clear when removeFile is set, else keep.
+  let fMime = cur.file_mime, fName = cur.file_name, fData = cur.file_data;
+  if (b.removeFile) { fMime = null; fName = null; fData = null; }
+  else if (b.dataUrl) {
+    const file = bulletinFile(b);
+    if (file && file.error) return res.status(400).json({ error: file.error });
+    if (file) { fMime = file.mime; fName = file.name; fData = file.data; }
+  }
+  db.prepare("UPDATE bulletins SET title=?, body=?, category=?, event_date=?, ends_at=?, pinned=?, active=?, file_mime=?, file_name=?, file_data=? WHERE id=?")
     .run(title, b.body !== undefined ? String(b.body).slice(0, 5000) : cur.body, category,
       b.eventDate !== undefined ? (b.eventDate || null) : cur.event_date,
       b.endsAt !== undefined ? (b.endsAt || null) : cur.ends_at,
       b.pinned !== undefined ? (b.pinned ? 1 : 0) : cur.pinned,
-      b.active !== undefined ? (b.active ? 1 : 0) : cur.active, cur.id);
+      b.active !== undefined ? (b.active ? 1 : 0) : cur.active,
+      fMime, fName, fData, cur.id);
   audit(req, 'update', 'bulletin', category + ': ' + title);
   res.json({ ok: true });
+});
+
+// Serve a bulletin's attached memo file (visible to a viewer in scope, or a poster).
+app.get('/api/bulletin-file/:id', A.requireAuth, (req, res) => {
+  const b = db.prepare('SELECT * FROM bulletins WHERE id = ?').get(req.params.id);
+  if (!b || !b.file_data) return res.status(404).end();
+  const isPoster = ['superadmin', 'admin_payroll', 'supervisor'].indexOf(req.user.role) >= 0 && canManageBulletin(req, b);
+  if (!isPoster) {
+    if (!b.active) return res.status(404).end();
+    const loc = userLocationId(req);
+    if (b.location_id && b.location_id !== loc) return res.status(403).end();
+  }
+  res.set('Content-Type', b.file_mime || 'application/octet-stream');
+  res.set('Content-Disposition', 'inline; filename="' + String(b.file_name || ('bulletin-' + b.id)).replace(/[^\w.\- ]+/g, '_') + '"');
+  res.send(Buffer.from(b.file_data, 'base64'));
+});
+
+// Poster: read receipts for a bulletin — who acknowledged, and who is still pending.
+app.get('/api/admin/bulletins/:id/acks', bulletinPosters, (req, res) => {
+  const b = db.prepare('SELECT * FROM bulletins WHERE id = ?').get(req.params.id);
+  if (!b) return res.status(404).json({ error: 'Not found.' });
+  if (!canManageBulletin(req, b)) return res.status(403).json({ error: 'Not allowed.' });
+  const acked = db.prepare(
+    "SELECT ba.created_at, u.full_name, u.email, u.employee_code FROM bulletin_acks ba " +
+    "JOIN users u ON u.id = ba.user_id WHERE ba.bulletin_id = ? ORDER BY ba.created_at"
+  ).all(b.id);
+  const ackedIds = {};
+  db.prepare('SELECT user_id FROM bulletin_acks WHERE bulletin_id = ?').all(b.id).forEach(function (a) { ackedIds[a.user_id] = 1; });
+  const locMap = effectiveUserLocations();
+  const audience = db.prepare("SELECT id, full_name, email, employee_code FROM users WHERE status = 'active' AND role IN ('employee','supervisor')").all()
+    .filter(function (u) { return !b.location_id || locMap[u.id] === b.location_id; });
+  const pending = audience.filter(function (u) { return !ackedIds[u.id]; })
+    .map(function (u) { return { fullName: u.full_name, email: u.email, code: u.employee_code }; });
+  res.json({
+    title: b.title,
+    acknowledged: acked.map(function (a) { return { fullName: a.full_name, email: a.email, code: a.employee_code, at: a.created_at }; }),
+    pending: pending, total: audience.length, count: acked.length
+  });
 });
 
 // Poster: delete a bulletin (own; central admins any within scope).
