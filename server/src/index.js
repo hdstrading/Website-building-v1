@@ -1663,10 +1663,12 @@ app.get('/api/me/schedule', A.requireAuth, (req, res) => {
 /* ---- Bulletin board: HR/payroll announcements, events, holidays, memos ---- */
 const BULLETIN_CATS = { announcement: 1, event: 1, holiday: 1, memo: 1 };
 // Attachable memo file types (upload a hard-copy memo instead of retyping it).
+// Images are shown inline on the bulletin; PDF/Word are offered as a link.
 const BULLETIN_FILE_MIME = {
   'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/msword': 'doc'
+  'application/msword': 'doc',
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'
 };
 const bulletinPosters = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
 // The location a user belongs to (managers carry it on the account; employees on
@@ -1702,7 +1704,7 @@ function effectiveUserLocations() {
 function bulletinFile(b) {
   if (!b.dataUrl) return null;
   const parsed = parseDataUrl(b.dataUrl);
-  if (!parsed || !BULLETIN_FILE_MIME[parsed.mime]) return { error: 'Attach a PDF or Word (DOC/DOCX) file.' };
+  if (!parsed || !BULLETIN_FILE_MIME[parsed.mime]) return { error: 'Attach a PDF, Word (DOC/DOCX) or image file.' };
   if (parsed.b64.length > 8 * 1024 * 1024) return { error: 'That file is too large (max ~6 MB).' };
   return { mime: parsed.mime, name: String(b.fileName || 'memo').slice(0, 200), data: parsed.b64 };
 }

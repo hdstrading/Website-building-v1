@@ -379,6 +379,27 @@
         fr.readAsDataURL(file);
       });
     }
+    // Downscale an image to a JPEG data URL so attachments stay small.
+    function compressImageDataUrl(file) {
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onerror = reject;
+        fr.onload = function () {
+          var img = new Image();
+          img.onerror = reject;
+          img.onload = function () {
+            var maxD = 1600, w = img.width, h = img.height;
+            if (w > h && w > maxD) { h = Math.round(h * maxD / w); w = maxD; }
+            else if (h > maxD) { w = Math.round(w * maxD / h); h = maxD; }
+            var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+            cv.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(cv.toDataURL('image/jpeg', 0.8));
+          };
+          img.src = fr.result;
+        };
+        fr.readAsDataURL(file);
+      });
+    }
     function renderDocuments() {
       var emps = empList();
       var empOpts = emps.map(function (e) { return '<option value="' + esc(e.code) + '">' + esc(empName(e)) + (e.code ? ' (' + esc(e.code) + ')' : '') + '</option>'; }).join('');
@@ -468,8 +489,8 @@
           '<label class="acc-chk" style="align-self:center"><input type="checkbox" id="bl-pin"> Pin</label></div>' +
           '<div class="acc-row"><input id="bl-title" placeholder="Title" style="flex:1" maxlength="160"></div>' +
           '<div class="acc-row"><textarea id="bl-body" placeholder="Details (optional)" rows="3" style="flex:1"></textarea></div>' +
-          '<div class="acc-row"><label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Attach memo file (optional — PDF or Word)' +
-          '<input type="file" id="bl-file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label></div>' +
+          '<div class="acc-row"><label style="display:flex;flex-direction:column;font-size:12px;gap:2px;color:#475569">Attach memo (optional — image, PDF or Word)' +
+          '<input type="file" id="bl-file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label></div>' +
           '<div class="acc-row"><button class="acc-btn" id="bl-post">Post</button><span id="bl-msg" class="acc-muted"></span></div></div>' +
           '<div id="bl-list"></div>';
         document.getElementById('bl-post').onclick = postBulletin;
@@ -489,7 +510,8 @@
         locationId: locEl ? (locEl.value || null) : null };
       var f = document.getElementById('bl-file').files[0];
       var btn = document.getElementById('bl-post'); btn.disabled = true; msg.textContent = ' Posting…';
-      var prep = f ? readFileDataUrl(f).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
+      // Images are downscaled (and shown inline on the post); PDF/Word pass through.
+      var prep = f ? (/^image\//.test(f.type) ? compressImageDataUrl(f) : readFileDataUrl(f)).then(function (d) { payload.dataUrl = d; payload.fileName = f.name; }) : Promise.resolve();
       prep.then(function () {
         return api('/api/admin/bulletins', { method: 'POST', body: JSON.stringify(payload) });
       }).then(function (r) {
