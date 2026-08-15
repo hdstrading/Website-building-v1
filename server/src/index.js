@@ -1659,6 +1659,109 @@ app.get('/api/me/schedule', A.requireAuth, (req, res) => {
     days: engine.scheduleForWeek(data, emp, start)
   });
 });
+
+/* ---- Bulletin board: HR/payroll announcements, events, holidays, memos ---- */
+const BULLETIN_CATS = { announcement: 1, event: 1, holiday: 1, memo: 1 };
+const bulletinPosters = A.requireRole('superadmin', 'admin_payroll', 'supervisor');
+// The location a user belongs to (managers carry it on the account; employees on
+// their 201 record) — used to scope which bulletins they see.
+function userLocationId(req) {
+  if (req.user.location_id) return req.user.location_id;
+  if (req.user.employee_code) {
+    const emp = findEmpByCode(getCompanyData(), req.user.employee_code);
+    if (emp) return emp.locationId || null;
+  }
+  return null;
+}
+function bulletinRow(b, unread) {
+  return { id: b.id, title: b.title, body: b.body, category: b.category, eventDate: b.event_date,
+    endsAt: b.ends_at, pinned: !!b.pinned, locationId: b.location_id, active: !!b.active,
+    authorName: b.author_name, authorRole: b.author_role, createdBy: b.created_by, createdAt: b.created_at, unread: unread };
+}
+function canManageBulletin(req, b) {
+  if (req.user.role === 'superadmin' || req.user.role === 'admin_payroll') {
+    if (req.user.location_id) return !b.location_id || b.location_id === req.user.location_id;
+    return true;
+  }
+  return b.created_by === req.user.id; // supervisors: only their own posts
+}
+
+// Employee: active bulletins for me (pinned first), each flagged unread.
+app.get('/api/me/bulletins', A.requireAuth, (req, res) => {
+  const loc = userLocationId(req);
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = db.prepare(
+    "SELECT * FROM bulletins WHERE active = 1 AND (ends_at IS NULL OR ends_at >= ?) " +
+    "ORDER BY pinned DESC, COALESCE(event_date, substr(created_at,1,10)) DESC, id DESC"
+  ).all(today).filter(function (b) { return !b.location_id || b.location_id === loc; });
+  const ack = {};
+  db.prepare('SELECT bulletin_id FROM bulletin_acks WHERE user_id = ?').all(req.user.id)
+    .forEach(function (a) { ack[a.bulletin_id] = 1; });
+  res.json({ bulletins: rows.map(function (b) { return bulletinRow(b, !ack[b.id]); }) });
+});
+
+// Mark bulletins as seen so they stop popping up on login.
+app.post('/api/me/bulletins/ack', A.requireAuth, (req, res) => {
+  const ids = (req.body && req.body.ids) || [];
+  const ins = db.prepare('INSERT OR IGNORE INTO bulletin_acks (bulletin_id, user_id) VALUES (?, ?)');
+  ids.forEach(function (id) { if (Number(id)) ins.run(Number(id), req.user.id); });
+  res.json({ ok: true });
+});
+
+// Poster: create a bulletin.
+app.post('/api/admin/bulletins', bulletinPosters, (req, res) => {
+  const b = req.body || {};
+  const category = BULLETIN_CATS[b.category] ? b.category : 'announcement';
+  const title = String(b.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'A title is required.' });
+  // Supervisors (and location-scoped admins) can only post to their own location;
+  // an unscoped central admin may target a specific location or all locations.
+  const locationId = req.user.location_id ? req.user.location_id : (b.locationId || null);
+  const info = db.prepare(
+    "INSERT INTO bulletins (title, body, category, event_date, ends_at, pinned, location_id, created_by, author_name, author_role) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(title, String(b.body || '').slice(0, 5000), category, b.eventDate || null, b.endsAt || null,
+    b.pinned ? 1 : 0, locationId, req.user.id, req.user.full_name || req.user.email, req.user.role);
+  audit(req, 'create', 'bulletin', category + ': ' + title);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+// Poster: list bulletins to manage (central admins: all; supervisors/scoped: their location).
+app.get('/api/admin/bulletins', bulletinPosters, (req, res) => {
+  let rows = db.prepare('SELECT * FROM bulletins ORDER BY pinned DESC, created_at DESC').all();
+  if (req.user.location_id) rows = rows.filter(function (b) { return !b.location_id || b.location_id === req.user.location_id; });
+  res.json({ bulletins: rows.map(function (b) { return bulletinRow(b, false); }), canScope: !req.user.location_id, locations: (getCompanyData().meta.locations || []) });
+});
+
+// Poster: edit a bulletin (own; central admins any within scope).
+app.post('/api/admin/bulletins/:id', bulletinPosters, (req, res) => {
+  const cur = db.prepare('SELECT * FROM bulletins WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found.' });
+  if (!canManageBulletin(req, cur)) return res.status(403).json({ error: 'You can only edit your own posts.' });
+  const b = req.body || {};
+  const category = BULLETIN_CATS[b.category] ? b.category : cur.category;
+  const title = b.title !== undefined ? String(b.title).trim() : cur.title;
+  if (!title) return res.status(400).json({ error: 'A title is required.' });
+  db.prepare("UPDATE bulletins SET title=?, body=?, category=?, event_date=?, ends_at=?, pinned=?, active=? WHERE id=?")
+    .run(title, b.body !== undefined ? String(b.body).slice(0, 5000) : cur.body, category,
+      b.eventDate !== undefined ? (b.eventDate || null) : cur.event_date,
+      b.endsAt !== undefined ? (b.endsAt || null) : cur.ends_at,
+      b.pinned !== undefined ? (b.pinned ? 1 : 0) : cur.pinned,
+      b.active !== undefined ? (b.active ? 1 : 0) : cur.active, cur.id);
+  audit(req, 'update', 'bulletin', category + ': ' + title);
+  res.json({ ok: true });
+});
+
+// Poster: delete a bulletin (own; central admins any within scope).
+app.delete('/api/admin/bulletins/:id', bulletinPosters, (req, res) => {
+  const cur = db.prepare('SELECT * FROM bulletins WHERE id = ?').get(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found.' });
+  if (!canManageBulletin(req, cur)) return res.status(403).json({ error: 'You can only delete your own posts.' });
+  db.prepare('DELETE FROM bulletins WHERE id = ?').run(cur.id);
+  audit(req, 'delete', 'bulletin', cur.category + ': ' + cur.title);
+  res.json({ ok: true });
+});
+
 // DTR is view-only for employees — attendance comes from the biometric device /
 // admin, so employees cannot change their own records (this would affect payroll).
 app.post('/api/me/dtr/:periodId', A.requireAuth, (req, res) => {
