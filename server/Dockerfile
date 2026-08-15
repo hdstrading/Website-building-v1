@@ -3,8 +3,13 @@
 FROM node:20-bookworm-slim
 
 # Build tools in case better-sqlite3 needs to compile (falls back from prebuilt).
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+# tzdata so the app's date logic (cut-offs, period generation, reminders) runs on
+# Philippine time rather than the container's default UTC.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Payroll dates are Philippine local time.
+ENV TZ=Asia/Manila
 
 WORKDIR /app
 
