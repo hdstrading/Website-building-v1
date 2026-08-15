@@ -332,6 +332,41 @@
     return results;
   }
 
+  /* Reopen a finalized period: exactly reverse the side effects that finalize
+   * applied (loan-balance amortizations and consumed leave credits), using the
+   * saved snapshot so the reversal is precise even if the DTR has since changed.
+   * The period returns to 'draft', so re-finalizing re-applies everything (the
+   * loans, deductions and SIL show up again). Safe to call only on a finalized
+   * period; the snapshot is cleared afterwards so it can't be reversed twice. */
+  function reopenPeriod(period) {
+    var S = PH.storage;
+    if (period.status === 'finalized') {
+      var results = S.db.payrolls[period.id] || {};
+      Object.keys(results).forEach(function (empId) {
+        // Restore loan balances (and re-activate any loan finalize had zeroed out).
+        (results[empId].loanDeductions || []).forEach(function (ld) {
+          var loan = S.find('loans', ld.id);
+          if (loan) {
+            loan.balance = round2((loan.balance || 0) + ld.amount);
+            if (loan.balance > 0) loan.active = true;
+          }
+        });
+        // Give back any consumed leave credits (SIL).
+        var lv = results[empId].leave;
+        if (lv && lv.paid > 0) {
+          var emp = S.find('employees', empId);
+          if (emp) emp.leaveCreditsUsed = round2(Math.max(0, (emp.leaveCreditsUsed || 0) - lv.paid));
+        }
+      });
+      // Drop the finalized snapshot so the draft recomputes fresh and a second
+      // reopen cannot double-reverse.
+      delete S.db.payrolls[period.id];
+    }
+    period.status = 'draft';
+    S.upsert('periods', period);
+    S.save();
+  }
+
   // 13th month pay = total basic salary earned in the year / 12.
   function thirteenthMonth(totalBasicEarned) {
     return round2((totalBasicEarned || 0) / 12);
@@ -343,6 +378,7 @@
     computeEmployee: computeEmployee,
     runPeriod: runPeriod,
     finalizePeriod: finalizePeriod,
+    reopenPeriod: reopenPeriod,
     thirteenthMonth: thirteenthMonth
   };
 })(window.PH = window.PH || {});
