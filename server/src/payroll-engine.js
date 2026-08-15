@@ -56,4 +56,21 @@ function overtimeForDay(companyData, emp, dtrDay) {
   return { amount: pay.overtime, hours: Math.round((otMin / 60) * 100) / 100 };
 }
 
-module.exports = { computePeriod, overtimeForDay };
+// Resolve an employee's effective shift for the 7 days starting at startISO,
+// using the shared schedule resolver (monthly grid -> weekday -> base shift).
+// Returns [{ date, weekday(0=Sun), in, out, off }].
+function scheduleForWeek(companyData, emp, startISO) {
+  const PH = loadEngine();
+  const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+  const start = new Date(startISO + 'T00:00:00');
+  const out = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    const iso = d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+    const s = PH.dtr.scheduleForDate(emp, iso);
+    out.push({ date: iso, weekday: d.getDay(), in: s.off ? '' : (s.in || ''), out: s.off ? '' : (s.out || ''), off: !!s.off });
+  }
+  return out;
+}
+
+module.exports = { computePeriod, overtimeForDay, scheduleForWeek };

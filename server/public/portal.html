@@ -95,6 +95,7 @@
   <nav class="tabs">
     <a href="#" class="active" data-tab="profile">My 201</a>
     <a href="#" data-tab="dtr">My DTR</a>
+    <a href="#" data-tab="schedule">My Schedule</a>
     <a href="#" data-tab="leave">File Leave</a>
     <a href="#" data-tab="teamcal">Team Calendar</a>
     <a href="#" data-tab="overtime">Overtime</a>
@@ -181,7 +182,7 @@
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
       ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, teamcal: viewTeamCal, overtime: viewOvertime, loans: viewLoans,
-         payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
+         schedule: viewSchedule, payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
     }
 
     // ---- bootstrap ----
@@ -513,6 +514,61 @@
       return manualOpen;                                               // 2+ months ahead
     }
     var MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    // ---- My Schedule (weekly shift, so employees know when to log in/out) ----
+    var DOW_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    var schedState = { start: null };
+    function isoAddDays(iso, n) {
+      var p = iso.split('-'); var d = new Date(+p[0], +p[1] - 1, +p[2] + n);
+      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    }
+    function fmtDay(iso) { var p = iso.split('-'); return +p[2] + ' ' + MONTHS[+p[1] - 1].slice(0, 3); }
+    function todayISO() { var d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+    function viewSchedule() {
+      var q = schedState.start ? ('?start=' + encodeURIComponent(schedState.start)) : '';
+      document.getElementById('view').innerHTML =
+        '<div class="card"><h2>My Weekly Schedule</h2><div class="in" id="schBody">Loading…</div></div>';
+      api('/api/me/schedule' + q).then(function (r) {
+        if (!r.ok || !r.body.linked) {
+          document.getElementById('schBody').innerHTML = '<p class="muted">Your account isn\'t linked to an employee record yet, so there\'s no schedule to show.</p>';
+          return;
+        }
+        schedState.start = r.body.weekStart;
+        drawSchedule(r.body);
+      });
+    }
+    function drawSchedule(b) {
+      var isOutput = b.employmentType === 'output';
+      var days = b.days || [];
+      var today = todayISO();
+      var rows = days.map(function (d) {
+        var when;
+        if (isOutput) when = '<span class="muted">Field work — no fixed log in/out</span>';
+        else if (d.off || (!d.in && !d.out)) when = '<span class="badge" style="background:#e2e8f0;color:#475569">Rest day</span>';
+        else when = '<b>' + esc(d.in || '—') + '</b> &nbsp;to&nbsp; <b>' + esc(d.out || '—') + '</b>';
+        var isToday = d.date === today;
+        return '<tr' + (isToday ? ' style="background:#eff6ff"' : '') + '>' +
+          '<td>' + DOW_FULL[d.weekday] + (isToday ? ' <span class="badge" style="background:#2563eb;color:#fff">Today</span>' : '') + '</td>' +
+          '<td class="muted">' + fmtDay(d.date) + '</td><td>' + when + '</td></tr>';
+      }).join('');
+      var last = days.length ? days[days.length - 1].date : b.weekStart;
+      var note = isOutput
+        ? '<p class="muted">You are a field / output-based staff member — pay is per day worked, so there is no fixed log in/out time.</p>'
+        : '<p class="muted">Break: ' + (b.breakMins != null ? b.breakMins : 60) + ' minutes. A blank day is a rest day. Times are set by your administrator.</p>';
+      document.getElementById('schBody').innerHTML =
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+          '<button class="btn ghost sm" id="schPrev">‹ Prev</button>' +
+          '<b>' + fmtDay(b.weekStart) + ' – ' + fmtDay(last) + '</b>' +
+          '<button class="btn ghost sm" id="schNext">Next ›</button>' +
+          '<button class="btn ghost sm" id="schToday" style="margin-left:auto">This week</button>' +
+        '</div>' +
+        '<table><thead><tr><th>Day</th><th>Date</th><th>Schedule</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+        note;
+      document.getElementById('schPrev').onclick = function () { schedState.start = isoAddDays(b.weekStart, -7); viewSchedule(); };
+      document.getElementById('schNext').onclick = function () { schedState.start = isoAddDays(b.weekStart, 7); viewSchedule(); };
+      document.getElementById('schToday').onclick = function () { schedState.start = null; viewSchedule(); };
+    }
+
     var leaveState = { month: null, sel: {}, win: { openDay: 21, manualOpen: false }, today: new Date(), creditsRemaining: 0 };
     // Exact wording required by HR for the Unpaid Authorized Leave acknowledgement.
     var UAL_NOTICE = 'usage of this reason will be subject to approval,  and must ONLY be used for any events that cannot be planned or booked in advance.';
