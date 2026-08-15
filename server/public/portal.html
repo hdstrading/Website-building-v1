@@ -1131,21 +1131,85 @@
         });
       });
     }
+    // Full payslip layout — matches the admin/printed payslip so employees see the
+    // complete breakdown (earnings, deductions, Daily Time Record, deductible
+    // balances and the summary footer).
+    var PS_DAY = { regular: 'Regular Day', rest_day: 'Rest Day', special: 'Special Non-Working Day',
+      special_rest: 'Special Day + Rest Day', regular_holiday: 'Regular Holiday', regular_hol_rest: 'Regular Holiday + Rest' };
+    function hFmt(min) { return ((min || 0) / 60).toFixed(2); }
+    function capw(s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+    var PSLIP_CSS =
+      '.pslip{font-family:Arial,Helvetica,sans-serif;color:#111;background:#fff;border:1px solid #333;padding:16px;max-width:720px;margin:0 auto}' +
+      '.pslip h4{margin:12px 0 4px;font-size:13px}' +
+      '.pslip .ps-head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:6px}' +
+      '.pslip .ps-co{font-size:17px;font-weight:bold}.pslip .ps-co-sub{font-size:10px;color:#555}.pslip .ps-title{font-size:15px;font-weight:bold;letter-spacing:2px}' +
+      '.pslip .ps-meta{display:flex;justify-content:space-between;gap:12px;font-size:11px;margin:8px 0;flex-wrap:wrap}' +
+      '.pslip .ps-cols{display:flex;gap:18px;flex-wrap:wrap}.pslip .ps-col{flex:1;min-width:220px}' +
+      '.pslip table{width:100%;border-collapse:collapse;font-size:11px}' +
+      '.pslip td,.pslip th{padding:3px 4px;border-bottom:1px dotted #ccc;text-align:left}.pslip .num{text-align:right}' +
+      '.pslip tfoot td{border-top:1px solid #111;border-bottom:none}' +
+      '.pslip .ps-net{margin-top:10px;background:#111;color:#fff;padding:8px 12px;display:flex;justify-content:space-between;font-weight:bold;font-size:15px}' +
+      '.pslip .ps-dtr-tbl th{border-bottom:1px solid #999}' +
+      '.pslip .ps-mini td{border-bottom:1px solid #eee}' +
+      '.pslip .ps-sign{display:flex;justify-content:space-between;margin-top:24px;font-size:11px;gap:12px}' +
+      '.pslip .muted{color:#777}';
+    function payslipInner(x) {
+      var r = x.result, p = x.period, c = state.profile.company || {}, emp = state.profile.employee || {};
+      var earn = (r.earnings || []).map(function (e) {
+        return '<tr><td>' + esc(e.name) + (e.taxable === false ? ' <span class="muted">(non-tax)</span>' : '') + '</td><td class="num">' + peso(e.amount) + '</td></tr>';
+      }).join('');
+      var ded = (r.deductions || []).map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') || '<tr><td class="muted">None</td><td></td></tr>';
+      var dtr = r.dtr || {};
+      var dtrDetail = '';
+      if (dtr.details && dtr.details.length) {
+        var drows = dtr.details.map(function (d) {
+          var dl = PS_DAY[d.dayType] || d.dayType; if (d.restDay) dl += ' (RD)';
+          var regCell;
+          if (d.absent) regCell = 'ABSENT';
+          else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
+          else regCell = (d.regularMinutes / 60).toFixed(2);
+          return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + '</td><td class="num">' + regCell +
+            '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) + '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
+            '</td><td class="num">' + (d.lateMinutes || 0) + '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
+        }).join('');
+        dtrDetail = '<div><h4>Daily Time Record</h4><table class="ps-dtr-tbl"><thead><tr><th>Date</th><th>Day Type</th>' +
+          '<th class="num">Reg h</th><th class="num">OT h</th><th class="num">ND h</th><th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
+          '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
+          '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td><td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+          '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td><td class="num"><b>' + (dtr.lateMinutes || 0) + '</b></td>' +
+          '<td class="num"><b>' + (dtr.undertimeMinutes || 0) + '</b></td></tr></tfoot></table></div>';
+      }
+      var noteRows = (r.loanDeductions || []).map(function (ld) {
+        var ref = ld.reference ? (' (' + ld.reference + ')') : '';
+        return '<tr><td>' + esc(ld.name) + esc(ref) + '</td><td class="num">' + peso(ld.amount) + '</td><td class="num">' + (ld.balance != null ? peso(ld.balance) : '—') + '</td></tr>';
+      }).join('');
+      var notes = '<div><h4>Notes — Deductibles &amp; Advances</h4>' +
+        (noteRows ? '<table><thead><tr><th>Item</th><th class="num">Deducted this period</th><th class="num">Remaining balance</th></tr></thead><tbody>' + noteRows + '</tbody></table>'
+          : '<p class="muted">No active loans, cash advances or product advances this period.</p>') + '</div>';
+      var contrib = r.contributions || {}, sss = contrib.sss || {};
+      var foot = '<div style="margin-top:12px"><table class="ps-mini">' +
+        '<tr><td>Days Present</td><td>' + (dtr.daysPresent || 0) + '</td><td>OT Hours</td><td>' + hFmt(dtr.otMinutes) + 'h</td><td>Night Diff</td><td>' + hFmt(dtr.nightDiffMinutes) + 'h</td></tr>' +
+        '<tr><td>Absences</td><td>' + (dtr.daysAbsent || 0) + '</td><td>Late</td><td>' + (dtr.lateMinutes || 0) + 'm</td><td>Undertime</td><td>' + (dtr.undertimeMinutes || 0) + 'm</td></tr>' +
+        '<tr><td>SSS MSC</td><td>' + peso(sss.msc || 0) + '</td><td>Taxable</td><td>' + peso(r.taxableBase || 0) + '</td><td>Contrib. Basis</td><td>' + peso(contrib.basis || 0) + '</td></tr>' +
+        (r.leave ? '<tr><td>Status</td><td>' + esc(capw(r.employmentStatus)) + '</td><td>Leave Used</td><td>' + r.leave.paid + '</td><td>Leave Left</td><td>' + r.leave.remainingAfter + '</td></tr>' +
+          ((r.leave.unpaidAuthorized || 0) > 0 ? '<tr><td>Unpaid Auth. Leave</td><td>' + r.leave.unpaidAuthorized + ' day' + (r.leave.unpaidAuthorized > 1 ? 's' : '') + '</td><td></td><td></td><td></td><td></td></tr>' : '') : '') +
+        '</table></div>';
+      return '<div class="pslip">' +
+        '<div class="ps-head"><div><div class="ps-co">' + esc(c.name || 'Company') + '</div>' +
+        '<div class="ps-co-sub">' + esc(c.address || '') + (c.tin ? ' • TIN ' + esc(c.tin) : '') + '</div></div><div class="ps-title">PAYSLIP</div></div>' +
+        '<div class="ps-meta"><div><b>' + esc(r.employeeName || state.profile.user.fullName || '') + '</b> (' + esc(r.employeeCode || emp.code || '') + ')' +
+        (emp.position ? '<br><span class="muted">' + esc(emp.position) + (emp.department ? ' • ' + esc(emp.department) : '') + '</span>' : '') + '</div>' +
+        '<div>Period: ' + esc(p.name) + '<br>Coverage: ' + esc(p.startDate || '') + ' – ' + esc(p.endDate || '') + '</div>' +
+        '<div>Pay Date: ' + esc(p.payDate || '—') + (emp.bankName ? '<br>Credit to: ' + esc(emp.bankName) + ' ' + esc(emp.bankAccountNumber || '') : '') + '</div></div>' +
+        '<div class="ps-cols"><div class="ps-col"><h4>Earnings</h4><table><tbody>' + earn + '</tbody><tfoot><tr><td><b>Gross Pay</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></tfoot></table></div>' +
+        '<div class="ps-col"><h4>Deductions</h4><table><tbody>' + ded + '</tbody><tfoot><tr><td><b>Total Deductions</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></tfoot></table></div></div>' +
+        '<div class="ps-net">NET PAY <span>' + peso(r.netPay) + '</span></div>' +
+        dtrDetail + notes + foot +
+        '<div class="ps-sign"><div>_____________________<br>Employee Signature</div><div>_____________________<br>Authorized Signatory</div></div></div>';
+    }
     function payslipDoc(x) {
-      var r = x.result, p = x.period, c = state.profile.company || {};
-      var earn = (r.earnings || []).map(function (e) { return '<tr><td>' + esc(e.name) + '</td><td class="num">' + peso(e.amount) + '</td></tr>'; }).join('');
-      var ded = (r.deductions || []).map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') || '<tr><td>None</td><td></td></tr>';
-      var css = 'body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:16px}.ps{border:1px solid #333;padding:16px;max-width:640px}' +
-        '.h{display:flex;justify-content:space-between;border-bottom:2px solid #333;padding-bottom:6px}.co{font-size:18px;font-weight:bold}' +
-        '.t{font-size:15px;font-weight:bold;letter-spacing:1px}.cols{display:flex;gap:18px;margin-top:10px}.cols>div{flex:1}' +
-        'table{width:100%;border-collapse:collapse;font-size:12px}td{padding:3px 4px;border-bottom:1px dotted #ccc}.num{text-align:right}' +
-        '.net{margin-top:10px;background:#111;color:#fff;padding:8px 12px;display:flex;justify-content:space-between;font-weight:bold;font-size:15px}';
-      return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip ' + esc(p.name) + '</title><style>' + css + '</style></head><body>' +
-        '<div class="ps"><div class="h"><div><div class="co">' + esc(c.name || 'Company') + '</div><div style="font-size:11px;color:#555">' + esc(c.address || '') + '</div></div><div class="t">PAYSLIP</div></div>' +
-        '<div style="font-size:12px;margin:8px 0"><b>' + esc(state.profile.user.fullName || '') + '</b> &nbsp; Period: ' + esc(p.name) + ' &nbsp; Pay Date: ' + esc(p.payDate || '—') + '</div>' +
-        '<div class="cols"><div><h4>Earnings</h4><table>' + earn + '<tr><td><b>Gross</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></table></div>' +
-        '<div><h4>Deductions</h4><table>' + ded + '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
-        '<div class="net"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div></div></body></html>';
+      return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Payslip ' + esc(x.period.name) + '</title>' +
+        '<style>body{margin:16px;background:#fff}' + PSLIP_CSS + '</style></head><body>' + payslipInner(x) + '</body></html>';
     }
     function printPayslip(x) {
       var html = payslipDoc(x);
@@ -1160,17 +1224,10 @@
       setTimeout(function () { w.print(); }, 300);
     }
     function showSlip(x) {
-      var r = x.result, p = x.period;
-      var earn = (r.earnings || []).map(function (e) { return '<tr><td>' + esc(e.name) + '</td><td class="num">' + peso(e.amount) + '</td></tr>'; }).join('');
-      var ded = (r.deductions || []).map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') || '<tr><td class="muted">None</td><td></td></tr>';
       document.getElementById('slipView').innerHTML =
-        '<div class="card"><h2>Payslip — ' + esc(p.name) + '</h2><div class="in">' +
-        '<div class="grid2"><div><h3 style="font-size:14px;margin:0 0 6px">Earnings</h3><table>' + earn +
-        '<tr><td><b>Gross</b></td><td class="num"><b>' + peso(r.grossPay) + '</b></td></tr></table></div>' +
-        '<div><h3 style="font-size:14px;margin:0 0 6px">Deductions</h3><table>' + ded +
-        '<tr><td><b>Total</b></td><td class="num"><b>' + peso(r.totalDeductions) + '</b></td></tr></table></div></div>' +
-        '<div style="margin-top:12px;background:#0b2447;color:#fff;padding:10px 14px;border-radius:8px;display:flex;justify-content:space-between;font-weight:700"><span>NET PAY</span><span>' + peso(r.netPay) + '</span></div>' +
-        '<button class="btn ghost sm" id="slipPrint" style="margin-top:12px">Print / Save PDF</button>' +
+        '<div class="card"><div class="in" style="overflow:auto">' +
+        '<style>' + PSLIP_CSS + '</style>' + payslipInner(x) +
+        '<div style="margin-top:12px;text-align:right"><button class="btn" id="slipPrint">Print / Save PDF</button></div>' +
         '</div></div>';
       document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });
       document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
