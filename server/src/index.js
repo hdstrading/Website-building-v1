@@ -1837,9 +1837,19 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
   const emp = findEmpByCode(data, req.user.employee_code);
   const out = [];
   if (emp) {
+    const loansById = {};
+    (data.loans || []).forEach(function (l) { loansById[l.id] = l; });
     (data.periods || []).forEach(function (p) {
       var r = (data.payrolls[p.id] || {})[emp.id];
-      if (r && p.status === 'finalized') out.push({ period: p, result: r });
+      if (!r || p.status !== 'finalized') return;
+      // Attach each loan's current balance/reference so the employee payslip can
+      // show the same "remaining balance" notes the admin sees.
+      var result = Object.assign({}, r);
+      result.loanDeductions = (r.loanDeductions || []).map(function (ld) {
+        var l = loansById[ld.id] || {};
+        return Object.assign({}, ld, { balance: l.balance != null ? l.balance : null, reference: l.reference || '' });
+      });
+      out.push({ period: p, result: result });
     });
   }
   res.json({ payslips: out });
