@@ -215,6 +215,30 @@ try { db.exec("ALTER TABLE bulletins ADD COLUMN file_mime TEXT"); } catch (e) { 
 try { db.exec("ALTER TABLE bulletins ADD COLUMN file_name TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE bulletins ADD COLUMN file_data TEXT"); } catch (e) { /* column already present */ }
 
+// Work-from-Home / Field-Work DTR filings. Employees who cannot use the biometric
+// file their own attendance for a day, attaching an EOD report and time-in/time-out
+// photos as proof. On approval it becomes a flat 8-hour worked day in the DTR (no
+// late/overtime). Files are stored as base64 in the same DB volume.
+db.exec(`
+CREATE TABLE IF NOT EXISTS wfh_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  employee_code TEXT,
+  work_date TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'wfh',          -- wfh | field
+  time_in TEXT, time_out TEXT,
+  eod_note TEXT DEFAULT '',
+  eod_mime TEXT, eod_name TEXT, eod_data TEXT,   -- EOD report file
+  in_mime TEXT, in_data TEXT,                    -- time-in photo
+  out_mime TEXT, out_data TEXT,                  -- time-out photo
+  status TEXT NOT NULL DEFAULT 'pending',        -- pending | approved | rejected
+  reviewed_by INTEGER, reviewed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_wfh_user ON wfh_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_wfh_status ON wfh_requests(status);
+`);
+
 // Employee-uploaded physical time cards (photo/scan) for a payroll period. The
 // image is kept as base64 so it persists in the same DB volume as everything else.
 db.exec(`
