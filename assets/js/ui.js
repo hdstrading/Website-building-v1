@@ -311,7 +311,7 @@
         (hasLoc ? '<td>' + esc(locationName(e.locationId) || '—') + '</td>' : '') +
         '<td>' + esc(e.employmentType) +
         '</td><td>' + money(e.basicSalary) + '</td><td>' + money(r.daily) +
-        '</td><td>' + (e.active !== false ? '<span class="badge badge-ok">active</span>' : '<span class="badge">inactive</span>') +
+        '</td><td>' + statusBadge(e) +
         '</td><td class="row-actions">' +
         '<button class="btn-sm" data-emp-view="' + e.id + '">201 File</button>' +
         '<button class="btn-sm" data-emp-edit="' + e.id + '">Edit</button>' +
@@ -407,6 +407,22 @@
       '<p class="muted">These issues can cause rejected SSS/PhilHealth/Pag-IBIG/BIR remittances. Fix them before filing. ' +
       '(A valid format is checked here; the agencies remain the authority on whether a number belongs to a person.)</p>' +
       '<div style="color:var(--warn)"><b>' + issues.length + ' employee(s)</b> need attention:</div><ul class="idcheck">' + list + '</ul>');
+  }
+
+  // Employee HR status. Only "active" is included in payroll; the legacy `active`
+  // boolean is kept in sync so the engine's filter is unchanged.
+  var EMP_STATUSES = [['active', 'Active'], ['suspended', 'Suspended'], ['awol', 'AWOL'], ['terminated', 'Terminated'], ['resigned', 'Resigned']];
+  var EMP_STATUS_LABEL = { active: 'Active', suspended: 'Suspended', awol: 'AWOL', terminated: 'Terminated', resigned: 'Resigned' };
+  function empStatusVal(e) {
+    if (e && e.status && EMP_STATUS_LABEL[e.status]) return e.status;
+    return (e && e.active !== false) ? 'active' : 'suspended'; // legacy inactive → shown as Suspended until set
+  }
+  function empStatusLabel(e) { return EMP_STATUS_LABEL[empStatusVal(e)] || 'Active'; }
+  function statusBadge(e) {
+    var v = empStatusVal(e);
+    if (v === 'active') return '<span class="badge badge-ok">Active</span>';
+    var style = (v === 'suspended') ? 'color:#b45309;background:#fef3c7' : 'color:#b91c1c;background:#fee2e2';
+    return '<span class="badge" style="' + style + '">' + esc(EMP_STATUS_LABEL[v]) + '</span>';
   }
 
   function employeeForm(emp) {
@@ -537,7 +553,8 @@
         field('Work Days / Week', '<input name="workDaysPerWeek" type="number" value="' + (emp.workDaysPerWeek || 6) + '">') +
         field('Rest Day', select('restDay', [['0','Sunday'],['1','Monday'],['2','Tuesday'],['3','Wednesday'],['4','Thursday'],['5','Friday'],['6','Saturday']], String(emp.restDay || 0))) +
         field('Contribution Basis', select('contributionBasis', [['basic','Monthly Basic Salary'],['gross','Gross Pay']], emp.contributionBasis || 'basic')) +
-        field('Status', select('active', [['true','Active'],['false','Inactive']], String(emp.active !== false))) +
+        field('Status', select('status', EMP_STATUSES, empStatusVal(emp)) +
+          '<small class="hint">Only <b>Active</b> employees are included in payroll runs.</small>') +
       '</div>' +
       '<h4 class="form-section">Statutory Deductions</h4>' +
       '<p class="sub">Probationary employees may opt out of government deductions for their first six months; switch these to “Deduct” once regularized. When off, both the employee and employer share are skipped and the employee is left off that agency’s remittance report.</p>' +
@@ -614,7 +631,10 @@
         if (Object.keys(kept).length || msTouched[k] || (emp.monthSchedule && emp.monthSchedule[k])) msClean[k] = kept;
       });
       if (Object.keys(msClean).length) data.monthSchedule = msClean; else delete data.monthSchedule;
-      data.active = data.active === 'true';
+      // HR status drives payroll inclusion: only "active" employees are paid, so
+      // keep the legacy `active` boolean in sync (the engine still filters on it).
+      data.status = EMP_STATUS_LABEL[data.status] ? data.status : 'active';
+      data.active = data.status === 'active';
       data.deductSSS = data.deductSSS === 'true';
       data.deductPhilHealth = data.deductPhilHealth === 'true';
       data.deductPagIBIG = data.deductPagIBIG === 'true';
@@ -687,7 +707,7 @@
           row('Work Schedule', (emp.schedTimeIn && emp.schedTimeOut) ? (emp.schedTimeIn + ' – ' + emp.schedTimeOut + ' (' + (emp.schedBreakMins != null ? emp.schedBreakMins : 60) + 'm break)') : 'Not set') +
           row('Leave Credits (yr)', (emp.leaveCreditsPerYear || 0) + ' — used ' + (emp.leaveCreditsUsed || 0) +
             ', ' + Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0)) + ' left') +
-          row('Status', emp.active !== false ? 'Active' : 'Inactive') +
+          row('Status', empStatusLabel(emp)) +
           '</table></div>' +
         '<div><h4>Government IDs</h4><table class="f201-tbl">' +
           idRow('sss') + idRow('philhealth') + idRow('pagibig') + idRow('tin') +
