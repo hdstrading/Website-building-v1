@@ -61,7 +61,7 @@
     ov.className = 'acc-overlay';
     var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a><a data-at="bulletins">Bulletins</a>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="wfh">WFH / Field</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a><a data-at="bulletins">Bulletins</a>' +
       (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
@@ -78,6 +78,7 @@
       body.innerHTML = 'Loading…';
       if (tab === 'leave') return api('/api/admin/leave-requests').then(function (r) { renderLeave(r.body.requests || []); });
       if (tab === 'overtime') return api('/api/admin/overtime-requests').then(function (r) { renderOvertime(r.body.requests || []); });
+      if (tab === 'wfh') return api('/api/admin/wfh-requests').then(function (r) { renderWfh(r.body.requests || []); });
       if (tab === 'loans') return api('/api/admin/loan-requests').then(function (r) { renderLoans(r.body.requests || []); });
       if (tab === 'pcr') return api('/api/admin/profile-requests').then(function (r) { renderPcr(r.body.requests || []); });
       if (tab === 'documents') return renderDocuments();
@@ -271,6 +272,37 @@
             renderTab('overtime');
           });
         }
+        if (ok) ok.onclick = function () { decide('approved'); };
+        if (no) no.onclick = function () { decide('rejected'); };
+      });
+    }
+
+    function renderWfh(reqs) {
+      if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No Work-from-Home / Field-Work filings.</p>'; return; }
+      body.innerHTML = '<p class="acc-muted">Employees who cannot use the biometric file their WFH / field day here with proof. ' +
+        'Approving credits a <b>full 8-hour day</b> (no tardiness or overtime is computed). Open the EOD report and in/out photos to verify.</p>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Time</th><th>Proof</th><th>Status</th><th></th></tr></thead><tbody>' +
+        reqs.map(function (x) {
+          var proof = '<a href="/api/wfh-file/' + x.id + '/eod" target="_blank">EOD</a> · ' +
+            '<a href="/api/wfh-file/' + x.id + '/timein" target="_blank">in</a> · ' +
+            '<a href="/api/wfh-file/' + x.id + '/timeout" target="_blank">out</a>';
+          return '<tr data-wid="' + x.id + '"><td>' + esc(x.full_name || x.employee_code || '') + '</td>' +
+            '<td>' + esc(x.workDate) + '</td><td>' + esc(x.modeLabel) + '</td>' +
+            '<td>' + esc(x.timeIn || '') + '–' + esc(x.timeOut || '') + '</td>' +
+            '<td>' + proof + (x.eodNote ? '<div class="acc-muted">' + esc(x.eodNote) + '</div>' : '') + '</td>' +
+            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
+            '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn w-ok">Approve</button><button class="acc-btn ghost w-no">Reject</button>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      body.querySelectorAll('tr[data-wid]').forEach(function (tr) {
+        var id = tr.dataset.wid;
+        function decide(d) {
+          api('/api/admin/wfh-requests/' + id, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function (r) {
+            if (!r.ok) { alert(r.body.error || 'Failed'); return; }
+            if (r.body.companyChanged) refreshCompany(); // DTR changed server-side
+            renderTab('wfh');
+          });
+        }
+        var ok = tr.querySelector('.w-ok'), no = tr.querySelector('.w-no');
         if (ok) ok.onclick = function () { decide('approved'); };
         if (no) no.onclick = function () { decide('rejected'); };
       });

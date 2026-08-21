@@ -415,13 +415,90 @@
             '<input id="tcNote" placeholder="Optional note (e.g. week 1)" style="display:block;margin-top:8px;width:100%;max-width:420px">' +
             '<button class="btn" id="tcUpload" style="margin-top:10px">Upload Time Card</button><span id="tcMsg" class="msg"></span>' +
             '<div id="tcList" style="margin-top:14px"></div>' +
-            '</div></div>' : '');
+            '</div></div>' : '') +
+          wfhCardHtml();
+        initWfh();
         if (!periods.length) return;
         var sel = document.getElementById('perSel');
         sel.addEventListener('change', function () { loadDtr(sel.value, periods); loadTimecards(sel.value); });
         document.getElementById('tcUpload').addEventListener('click', function () { uploadTimecard(sel.value); });
         loadDtr(sel.value, periods);
         loadTimecards(sel.value);
+      });
+    }
+    // ---- File Work-from-Home / Field Work (for staff who can't use biometric) ----
+    function wfhCardHtml() {
+      return '<div class="card"><h2>File Work-from-Home / Field Work</h2><div class="in">' +
+        '<p class="muted">If you worked from home or in the field and could not use the biometric, file the day here with proof. ' +
+        'Once approved it is credited as a <b>full 8-hour day</b> (no tardiness or overtime is computed). ' +
+        'An <b>EOD report</b> and <b>time-in / time-out photos</b> are required.</p>' +
+        '<div class="grid2">' +
+        '<div><label>Type</label><select id="wMode"><option value="wfh">Work from Home</option><option value="field">Field Work</option></select></div>' +
+        '<div><label>Date</label><input type="date" id="wDate"></div>' +
+        '<div><label>Time In</label><input type="time" id="wIn"></div>' +
+        '<div><label>Time Out</label><input type="time" id="wOut"></div>' +
+        '</div>' +
+        '<label style="margin-top:8px">EOD report (PDF, Word or image)</label><input type="file" id="wEod" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">' +
+        '<div class="grid2" style="margin-top:8px">' +
+        '<div><label>Time-in photo</label><input type="file" id="wInPhoto" accept="image/*" capture="user"></div>' +
+        '<div><label>Time-out photo</label><input type="file" id="wOutPhoto" accept="image/*" capture="user"></div>' +
+        '</div>' +
+        '<label style="margin-top:8px">Notes (optional)</label><textarea id="wNote" rows="2" style="width:100%"></textarea>' +
+        '<button class="btn" id="wSubmit" style="margin-top:10px">Submit filing</button><span id="wMsg" class="msg"></span>' +
+        '<div id="wList" style="margin-top:14px">Loading…</div>' +
+        '</div></div>';
+    }
+    function initWfh() {
+      var d = document.getElementById('wDate'); if (d) d.value = todayISO();
+      var btn = document.getElementById('wSubmit');
+      if (btn) btn.addEventListener('click', submitWfh);
+      loadWfh();
+    }
+    function fileToUpload(input) {
+      var f = input && input.files[0];
+      if (!f) return Promise.resolve(null);
+      // Images are downscaled; PDF/Word pass through.
+      return (/^image\//.test(f.type) ? tcCompress(f) : readFileDataUrl(f)).then(function (d) { return { dataUrl: d, name: f.name }; });
+    }
+    function submitWfh() {
+      var m = document.getElementById('wMsg');
+      var mode = document.getElementById('wMode').value;
+      var date = document.getElementById('wDate').value;
+      var tin = document.getElementById('wIn').value, tout = document.getElementById('wOut').value;
+      if (!date || !tin || !tout) { m.textContent = '  Fill in the date, time in and time out.'; m.className = 'msg err'; return; }
+      if (!document.getElementById('wEod').files[0]) { m.textContent = '  Attach your EOD report.'; m.className = 'msg err'; return; }
+      if (!document.getElementById('wInPhoto').files[0] || !document.getElementById('wOutPhoto').files[0]) { m.textContent = '  Attach both time-in and time-out photos.'; m.className = 'msg err'; return; }
+      var btn = document.getElementById('wSubmit'); btn.disabled = true; m.textContent = '  Uploading…'; m.className = 'msg';
+      Promise.all([fileToUpload(document.getElementById('wEod')), fileToUpload(document.getElementById('wInPhoto')), fileToUpload(document.getElementById('wOutPhoto'))])
+        .then(function (fs) {
+          return api('/api/me/wfh', { method: 'POST', body: JSON.stringify({
+            workDate: date, mode: mode, timeIn: tin, timeOut: tout, eodNote: document.getElementById('wNote').value,
+            eodDataUrl: fs[0].dataUrl, eodName: fs[0].name, inPhoto: fs[1].dataUrl, outPhoto: fs[2].dataUrl }) });
+        }).then(function (r) {
+          btn.disabled = false;
+          if (!r.ok) { m.textContent = '  ' + (r.body.error || 'Could not submit.'); m.className = 'msg err'; return; }
+          m.textContent = '  ✓ Filed — pending approval'; m.className = 'msg ok';
+          document.getElementById('wEod').value = ''; document.getElementById('wInPhoto').value = ''; document.getElementById('wOutPhoto').value = ''; document.getElementById('wNote').value = '';
+          loadWfh();
+        }).catch(function () { btn.disabled = false; m.textContent = '  Could not read a file.'; m.className = 'msg err'; });
+    }
+    function loadWfh() {
+      api('/api/me/wfh').then(function (r) {
+        var list = (r.body && r.body.filings) || [];
+        var el = document.getElementById('wList'); if (!el) return;
+        if (!list.length) { el.innerHTML = '<p class="muted">No filings yet.</p>'; return; }
+        el.innerHTML = '<table><thead><tr><th>Date</th><th>Type</th><th>Time</th><th>Proof</th><th>Status</th><th></th></tr></thead><tbody>' +
+          list.map(function (w) {
+            var proof = '<a href="/api/wfh-file/' + w.id + '/eod" target="_blank">EOD</a> · ' +
+              '<a href="/api/wfh-file/' + w.id + '/timein" target="_blank">in</a> · ' +
+              '<a href="/api/wfh-file/' + w.id + '/timeout" target="_blank">out</a>';
+            return '<tr><td>' + esc(w.workDate) + '</td><td>' + esc(w.modeLabel) + '</td><td>' + esc(w.timeIn || '') + '–' + esc(w.timeOut || '') + '</td>' +
+              '<td style="font-size:12px">' + proof + '</td><td><span class="badge ' + w.status + '">' + w.status + '</span></td>' +
+              '<td>' + (w.status === 'pending' ? '<button class="btn sm ghost" data-wcancel="' + w.id + '">Cancel</button>' : '') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        el.querySelectorAll('[data-wcancel]').forEach(function (b) {
+          b.onclick = function () { if (!confirm('Cancel this filing?')) return; api('/api/me/wfh/' + b.dataset.wcancel, { method: 'DELETE' }).then(loadWfh); };
+        });
       });
     }
     // ---- Physical time card uploads ----
@@ -1226,6 +1303,7 @@
       if (dtr.details && dtr.details.length) {
         var drows = dtr.details.map(function (d) {
           var dl = PS_DAY[d.dayType] || d.dayType; if (d.restDay) dl += ' (RD)';
+          if (d.workMode === 'wfh') dl += ' · WFH'; else if (d.workMode === 'field') dl += ' · Field';
           var regCell;
           if (d.absent) regCell = 'ABSENT';
           else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
@@ -1392,6 +1470,7 @@
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
         '<button class="btn ghost sm apv-seg" data-seg="leave">Leave</button>' +
         '<button class="btn ghost sm apv-seg" data-seg="overtime">Overtime</button>' +
+        '<button class="btn ghost sm apv-seg" data-seg="wfh">WFH / Field</button>' +
         '<button class="btn ghost sm apv-seg" data-seg="loans">Product Advances</button>' +
         '</div><div id="apvArea">Loading…</div></div></div>';
       document.querySelectorAll('.apv-seg').forEach(function (b) { b.addEventListener('click', function () { apvLoad(b.dataset.seg); }); });
@@ -1432,6 +1511,17 @@
           }).join('');
           area.innerHTML = rows ? '<div class="scroll"><table><thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Reason</th><th class="num">OT Hrs</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">No overtime requests.</p>';
           apvBind(area, '/api/admin/overtime-requests', 'overtime');
+        });
+      } else if (seg === 'wfh') {
+        api('/api/admin/wfh-requests').then(function (r) {
+          var rows = (r.body.requests || []).map(function (x) {
+            var proof = '<a href="/api/wfh-file/' + x.id + '/eod" target="_blank">EOD</a> · <a href="/api/wfh-file/' + x.id + '/timein" target="_blank">in</a> · <a href="/api/wfh-file/' + x.id + '/timeout" target="_blank">out</a>';
+            return '<tr><td>' + esc(x.full_name || x.employee_code || '') + '</td><td>' + esc(x.workDate) + '</td><td>' + esc(x.modeLabel) + '</td><td>' + esc(x.timeIn || '') + '–' + esc(x.timeOut || '') +
+              '</td><td style="font-size:12px">' + proof + (x.eodNote ? '<div class="muted">' + esc(x.eodNote) + '</div>' : '') + '</td><td><span class="badge ' + x.status + '">' + x.status + '</span></td><td>' + apvActions(x) + '</td></tr>';
+          }).join('');
+          area.innerHTML = '<p class="muted">Approving credits a full 8-hour day (no tardiness/overtime). Open the EOD report and in/out photos to verify.</p>' +
+            (rows ? '<div class="scroll"><table><thead><tr><th>Employee</th><th>Date</th><th>Type</th><th>Time</th><th>Proof</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<p class="muted">No WFH / Field filings.</p>');
+          apvBind(area, '/api/admin/wfh-requests', 'wfh');
         });
       } else {
         api('/api/admin/loan-requests').then(function (r) {

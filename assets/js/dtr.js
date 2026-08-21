@@ -172,15 +172,19 @@
 
     if (day.absent) return result;
 
-    // Output-based (field) employees have no time in/out — they are paid a fixed
-    // rate per day worked. A day flagged "worked" counts as one full standard day
-    // (priced at the daily rate via the day-type multiplier); no late / undertime
-    // / overtime / night-differential applies. Days not worked fall through with
-    // zero minutes, so unworked paid leave and unworked regular holidays are still
-    // handled by the summary/payroll exactly like other employees.
-    if (opts.outputBased) {
-      var workedFlag = day.worked === true || truthy(day.worked);
-      if (workedFlag) {
+    // Flat full-day pricing (no time in/out math). Applies to:
+    //  - Output-based (field) employees, paid a fixed rate per day worked; the day
+    //    must be flagged "worked".
+    //  - Any employee's approved Work-from-Home / Field-Work filing (day.workMode
+    //    'wfh' | 'field') — inherently a worked day.
+    // A qualifying day counts as one full standard 8-hour day (priced via the
+    // day-type multiplier); NO late / undertime / overtime / night-differential.
+    // Days that don't qualify fall through with zero minutes, so unworked paid
+    // leave and unworked regular holidays are still handled as for any employee.
+    var flatMode = day.workMode === 'wfh' || day.workMode === 'field';
+    if (opts.outputBased || flatMode) {
+      var worked = flatMode || day.worked === true || truthy(day.worked);
+      if (worked) {
         var req = day.requiredMinutes != null ? day.requiredMinutes : STANDARD_DAY_MINUTES;
         result.workedMinutes = req;
         result.regularMinutes = req;

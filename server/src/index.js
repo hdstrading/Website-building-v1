@@ -926,6 +926,130 @@ app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
   res.json({ ok: true, companyChanged: companyChanged, carriedTo: carriedTo ? carriedTo.name : null });
 });
 
+/* ---- Work-from-Home / Field-Work DTR filings (employee self-service) ---- */
+const WFH_MODES = { wfh: 'Work from Home', field: 'Field Work' };
+const WFH_DOC_MIME = { 'application/pdf': 1, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 1,
+  'application/msword': 1, 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1 };
+const WFH_IMG_MIME = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1 };
+function wfhTooBig(b64) { return b64.length > 8 * 1024 * 1024; }
+function wfhMeta(r) {
+  return { id: r.id, workDate: r.work_date, mode: r.mode, modeLabel: WFH_MODES[r.mode] || r.mode,
+    timeIn: r.time_in, timeOut: r.time_out, eodNote: r.eod_note, status: r.status, createdAt: r.created_at,
+    employee_code: r.employee_code, full_name: r.full_name,
+    hasEod: !!r.eod_data, eodName: r.eod_name, eodMime: r.eod_mime,
+    hasIn: !!r.in_data, hasOut: !!r.out_data };
+}
+
+// Employee files a WFH / Field-Work day with proof (EOD report + in/out photos).
+app.post('/api/me/wfh', A.requireAuth, (req, res) => {
+  const b = req.body || {};
+  const mode = WFH_MODES[b.mode] ? b.mode : null;
+  if (!mode) return res.status(400).json({ error: 'Choose Work from Home or Field Work.' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.workDate || ''))) return res.status(400).json({ error: 'Choose the work date.' });
+  if (!b.timeIn || !b.timeOut) return res.status(400).json({ error: 'Enter your time in and time out.' });
+  const eod = parseDataUrl(b.eodDataUrl);
+  if (!eod || !WFH_DOC_MIME[eod.mime]) return res.status(400).json({ error: 'Attach your EOD report (PDF, Word or image).' });
+  const pin = parseDataUrl(b.inPhoto), pout = parseDataUrl(b.outPhoto);
+  if (!pin || !WFH_IMG_MIME[pin.mime]) return res.status(400).json({ error: 'Attach a time-in photo.' });
+  if (!pout || !WFH_IMG_MIME[pout.mime]) return res.status(400).json({ error: 'Attach a time-out photo.' });
+  if (wfhTooBig(eod.b64) || wfhTooBig(pin.b64) || wfhTooBig(pout.b64)) return res.status(400).json({ error: 'One of the files is too large (max ~6 MB each).' });
+  const info = db.prepare(
+    "INSERT INTO wfh_requests (user_id, employee_code, work_date, mode, time_in, time_out, eod_note, eod_mime, eod_name, eod_data, in_mime, in_data, out_mime, out_data) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(req.user.id, req.user.employee_code || null, b.workDate, mode, String(b.timeIn).slice(0, 5), String(b.timeOut).slice(0, 5),
+    String(b.eodNote || '').slice(0, 1000), eod.mime, String(b.eodName || 'EOD report').slice(0, 200), eod.b64,
+    pin.mime, pin.b64, pout.mime, pout.b64);
+  audit(req, 'create', 'wfh filing', mode + ' ' + b.workDate);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+// The employee's own filings (metadata only).
+app.get('/api/me/wfh', A.requireAuth, (req, res) => {
+  const rows = db.prepare(
+    "SELECT id, work_date, mode, time_in, time_out, eod_note, status, created_at, employee_code, eod_name, eod_mime, eod_data, in_data, out_data FROM wfh_requests WHERE user_id = ? ORDER BY work_date DESC, id DESC"
+  ).all(req.user.id);
+  res.json({ filings: rows.map(wfhMeta) });
+});
+
+// Cancel a still-pending filing.
+app.delete('/api/me/wfh/:id', A.requireAuth, (req, res) => {
+  const info = db.prepare("DELETE FROM wfh_requests WHERE id = ? AND user_id = ? AND status = 'pending'").run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Not found (or already reviewed).' });
+  res.json({ ok: true });
+});
+
+// Serve one proof file: kind = eod | timein | timeout. Owner or a reviewer (scoped).
+app.get('/api/wfh-file/:id/:kind', A.requireAuth, (req, res) => {
+  const r = db.prepare('SELECT * FROM wfh_requests WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).end();
+  const isOwner = r.user_id === req.user.id;
+  const isReviewer = ['superadmin', 'admin_payroll', 'finance', 'supervisor'].indexOf(req.user.role) >= 0;
+  if (!isOwner && !isReviewer) return res.status(403).end();
+  if (!isOwner && isReviewer && req.user.location_id) {
+    const loc = {}; (getCompanyData().employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+    if (loc[r.employee_code] !== req.user.location_id) return res.status(403).end();
+  }
+  let mime, data;
+  if (req.params.kind === 'eod') { mime = r.eod_mime; data = r.eod_data; }
+  else if (req.params.kind === 'timein') { mime = r.in_mime; data = r.in_data; }
+  else if (req.params.kind === 'timeout') { mime = r.out_mime; data = r.out_data; }
+  if (!data) return res.status(404).end();
+  res.set('Content-Type', mime || 'application/octet-stream');
+  res.set('Content-Disposition', 'inline; filename="wfh-' + r.id + '-' + req.params.kind + '"');
+  res.send(Buffer.from(data, 'base64'));
+});
+
+// Reviewers: list filings (location-scoped, pending first).
+app.get('/api/admin/wfh-requests', canReview, (req, res) => {
+  const rows = db.prepare(
+    "SELECT w.id, w.work_date, w.mode, w.time_in, w.time_out, w.eod_note, w.status, w.created_at, w.employee_code, w.eod_name, w.eod_mime, w.eod_data, w.in_data, w.out_data, u.full_name " +
+    "FROM wfh_requests w JOIN users u ON u.id = w.user_id ORDER BY (w.status = 'pending') DESC, w.work_date DESC, w.id DESC"
+  ).all();
+  res.json({ requests: scopeRequestRows(req, rows).map(wfhMeta) });
+});
+
+// Reviewers: approve (writes a flat 8-hour DTR day — no late/OT) or reject.
+app.post('/api/admin/wfh-requests/:id', canDecide, (req, res) => {
+  const { decision } = req.body || {};
+  if (['approved', 'rejected'].indexOf(decision) < 0) return res.status(400).json({ error: 'Invalid decision.' });
+  const row = db.prepare('SELECT * FROM wfh_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Filing not found.' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, row.employee_code);
+  if (req.user.location_id && (!emp || (emp.locationId || null) !== req.user.location_id)) return res.status(403).json({ error: 'Not allowed for this location.' });
+  let note = '', companyChanged = false;
+  if (decision === 'approved') {
+    if (!emp) return res.status(400).json({ error: 'This filing is not linked to an employee record.' });
+    const period = periodForDate(data, row.work_date);
+    if (!period) return res.status(400).json({ error: 'No payroll period covers ' + row.work_date + '. Create the period first, then approve.' });
+    if (period.status === 'finalized') {
+      note = ' Its cut-off is already finalized, so it was not added to that (locked) payroll.';
+    } else {
+      data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
+      const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+      const rowObj = { date: row.work_date, timeIn: row.time_in, timeOut: row.time_out, workMode: row.mode, dayType: 'regular', absent: false };
+      const ex = days.find(function (d) { return d.date === row.work_date; });
+      if (ex) Object.assign(ex, rowObj); else days.push(rowObj);
+      try { saveCompanyData(data); companyChanged = true; } catch (e) { return res.status(409).json({ error: 'Data changed, please reload and retry.' }); }
+    }
+  } else if (decision === 'rejected' && row.status === 'approved') {
+    // Undo a previously approved DTR day when reversing the decision.
+    const period = periodForDate(data, row.work_date);
+    if (period && period.status !== 'finalized' && emp) {
+      const days = ((data.dtr || {})[period.id] || {})[emp.id];
+      if (days) {
+        const i = days.findIndex(function (d) { return d.date === row.work_date && d.workMode; });
+        if (i >= 0) { days.splice(i, 1); try { saveCompanyData(data); companyChanged = true; } catch (e) { /* leave status */ } }
+      }
+    }
+  }
+  db.prepare("UPDATE wfh_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?").run(decision, req.user.id, row.id);
+  notify(row.user_id, 'dtr', (WFH_MODES[row.mode] || 'WFH') + ' ' + decision,
+    'Your ' + (WFH_MODES[row.mode] || 'WFH') + ' filing for ' + row.work_date + ' was ' + decision + '.' + note);
+  audit(req, decision, 'wfh filing', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.mode + ' ' + row.work_date + ' ' + decision);
+  res.json({ ok: true, companyChanged: companyChanged, note: note });
+});
+
 /* ---- loan applications (admin review) ---- */
 app.get('/api/admin/loan-requests', canReview, (req, res) => {
   let rows = db.prepare(
