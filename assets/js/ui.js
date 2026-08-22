@@ -749,7 +749,12 @@
     var period = S.find('periods', pid);
     var dtr = (S.db.dtr[pid]) || {};
 
-    var byEmp = scopeEmps(S.list('employees')).map(function (e) {
+    // Only Active employees are on the payroll roster; a non-active one (AWOL /
+    // Terminated / Resigned / Suspended) is shown only if they already have DTR
+    // this period (so a final DTR entered while still active stays editable).
+    var byEmp = scopeEmps(S.list('employees')).filter(function (e) {
+      return e.active !== false || ((dtr[e.id] || []).length > 0);
+    }).map(function (e) {
       var days = dtr[e.id] || [];
       var sched = e.employmentType === 'output'
         ? '<span class="muted">Field / output</span>'

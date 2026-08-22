@@ -1073,11 +1073,12 @@ app.post('/api/admin/loan-requests/:id', canDecide, (req, res) => {
   if (reqRow.status !== 'pending') return res.status(400).json({ error: 'This request has already been decided.' });
 
   if (decision === 'rejected') {
-    db.prepare('UPDATE loan_requests SET status = \'rejected\', reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
-      .run(req.user.id, reqRow.id);
-    notify(reqRow.user_id, 'loan', 'Loan application rejected',
-      (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') + ' was not approved.');
-    audit(req, 'reject', 'loan request', (reqRow.employee_code || ('user ' + reqRow.user_id)) + ' ' + (LOAN_TYPES[reqRow.loan_type] || reqRow.loan_type) + ' ₱' + reqRow.amount + ' rejected');
+    const reason = String((req.body || {}).reason || '').trim().slice(0, 500);
+    db.prepare('UPDATE loan_requests SET status = \'rejected\', decline_reason = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
+      .run(reason, req.user.id, reqRow.id);
+    notify(reqRow.user_id, 'loan', 'Loan application declined',
+      (LOAN_TYPES[reqRow.loan_type] || 'Loan') + ' for ₱' + Number(reqRow.amount).toLocaleString('en-PH') + ' was declined.' + (reason ? ' Reason: ' + reason : ''));
+    audit(req, 'reject', 'loan request', (reqRow.employee_code || ('user ' + reqRow.user_id)) + ' ' + (LOAN_TYPES[reqRow.loan_type] || reqRow.loan_type) + ' ₱' + reqRow.amount + ' declined' + (reason ? ' — ' + reason : ''));
     return res.json({ ok: true });
   }
 
