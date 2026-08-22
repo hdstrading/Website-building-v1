@@ -345,7 +345,8 @@
             '<td>' + esc(x.loan_type_label || x.loan_type) + (x.reason ? '<div class="acc-muted">' + esc(x.reason) + '</div>' : '') + '</td>' +
             '<td>' + peso(x.amount) + '<div class="acc-muted">' + esc(x.installments) + ' cutoff(s) requested</div></td>' +
             '<td>' + (x.status === 'pending' ? '<input class="ln-amt" type="number" step="0.01" value="' + suggested + '" style="width:100px">' : (x.loan_id ? 'loan created' : '—')) + '</td>' +
-            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
+            '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span>' +
+            (x.decline_reason ? '<div class="acc-muted">Reason: ' + esc(x.decline_reason) + '</div>' : '') + '</td>' +
             '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn ln-ok">Approve</button><button class="acc-btn ghost ln-no">Reject</button>' : '') + '</td></tr>';
         }).join('') + '</tbody></table>';
       body.querySelectorAll('tr[data-lid]').forEach(function (tr) {
@@ -361,7 +362,9 @@
             });
         };
         if (no) no.onclick = function () {
-          api('/api/admin/loan-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: 'rejected' }) }).then(function () { renderTab('loans'); });
+          var reason = prompt('Reason for declining this loan application (shown to the employee):', '');
+          if (reason === null) return; // cancelled
+          api('/api/admin/loan-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: 'rejected', reason: reason }) }).then(function () { renderTab('loans'); });
         };
       });
     }
