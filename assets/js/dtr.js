@@ -141,7 +141,8 @@
       workedMinutes: 0, regularMinutes: 0, otMinutes: 0, otRawMinutes: 0,
       preOtMinutes: 0, preOtRawMinutes: 0, otExcludedMinutes: 0,
       nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0,
-      absent: !!day.absent, paidLeave: !!day.leavePaid, leaveType: day.leaveType || ''
+      absent: !!day.absent, paidLeave: !!day.leavePaid, leaveType: day.leaveType || '',
+      workMode: day.workMode || ''   // 'wfh' | 'field' — surfaced on the payslip DTR
     };
 
     var hasVal = function (x) { return x != null && String(x).trim() !== ''; };

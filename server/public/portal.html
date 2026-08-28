@@ -1304,7 +1304,7 @@
       if (dtr.details && dtr.details.length) {
         var drows = dtr.details.map(function (d) {
           var dl = PS_DAY[d.dayType] || d.dayType; if (d.restDay) dl += ' (RD)';
-          if (d.workMode === 'wfh') dl += ' · WFH'; else if (d.workMode === 'field') dl += ' · Field';
+          if (d.workMode === 'wfh') dl += ' (WFH)'; else if (d.workMode === 'field') dl += ' (FW)';
           var regCell;
           if (d.absent) regCell = 'ABSENT';
           else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
