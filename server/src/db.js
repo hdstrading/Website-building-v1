@@ -123,6 +123,27 @@ try { db.exec("ALTER TABLE overtime_requests ADD COLUMN ot_kind TEXT NOT NULL DE
 // Reason an admin gives when declining a loan application (shown to the employee).
 try { db.exec("ALTER TABLE loan_requests ADD COLUMN decline_reason TEXT"); } catch (e) { /* column already present */ }
 
+// Proof-of-payment receipts for remitted government contributions (SSS,
+// PhilHealth, Pag-IBIG) and BIR, kept as records under the reports. Stored as
+// base64, keyed by agency + month (+ location for multi-branch).
+db.exec(`
+CREATE TABLE IF NOT EXISTS remittance_receipts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agency TEXT NOT NULL,             -- sss | philhealth | pagibig | bir
+  period_key TEXT NOT NULL,         -- 'YYYY-MM' the contribution/tax is for
+  location_id TEXT,                 -- null = company-wide / all locations
+  mime TEXT NOT NULL,
+  file_name TEXT DEFAULT '',
+  data TEXT NOT NULL,
+  note TEXT DEFAULT '',             -- OR / reference number, remarks
+  amount REAL,                      -- amount paid (optional)
+  paid_at TEXT,                     -- date paid (optional, ISO)
+  uploaded_by INTEGER, uploader_role TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_remit_key ON remittance_receipts(agency, period_key);
+`);
+
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
