@@ -347,12 +347,39 @@ function reconcileWfhDtr(data) {
   return changed;
 }
 
+// Self-heal: make sure every APPROVED leave has its paid-leave day in the
+// employee's correct open period, so approved leaves that predate the auto-apply
+// still reach payroll. Idempotent — only adds a day where none exists for that
+// date; never overrides a worked/absent day or a finalized period.
+function reconcileLeaveDtr(data) {
+  let changed = false;
+  let rows;
+  try { rows = db.prepare("SELECT employee_code, date_from, date_to, leave_type FROM leave_requests WHERE status = 'approved'").all(); }
+  catch (e) { return false; }
+  rows.forEach(function (lr) {
+    if (!lr.employee_code) return;
+    const emp = findEmpByCode(data, lr.employee_code);
+    if (!emp) return;
+    datesInRange(lr.date_from, lr.date_to).forEach(function (date) {
+      const period = periodForDateLoc(data, date, emp.locationId);
+      if (!period || period.status === 'finalized') return;
+      data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
+      const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+      if (days.some(function (d) { return d.date === date; })) return; // a row already exists — don't disturb
+      days.push({ date: date, leaveType: lr.leave_type, leavePaid: true, dayType: 'regular' });
+      changed = true;
+    });
+  });
+  return changed;
+}
+
 function runDailyJobs() {
   try {
     const data = getCompanyData();
     const today = todayLocal();
     let changed = ensurePeriods(data, today);
     if (reconcileWfhDtr(data)) changed = true;
+    if (reconcileLeaveDtr(data)) changed = true;
     (data.periods || []).forEach(function (p) {
       if (p.status === 'finalized') return;
       const end = parseDateLocal(p.endDate);
@@ -400,6 +427,14 @@ function periodForDateLoc(data, dateStr, loc) {
   return inRange.find(function (p) { return (p.locationId || null) === (loc || null); })
     || inRange.find(function (p) { return !p.locationId; })
     || inRange[0] || null;
+}
+// Inclusive list of ISO dates between two ISO dates (capped for safety).
+function datesInRange(from, to) {
+  const a = parseDateLocal(from), b = parseDateLocal(to);
+  if (isNaN(a.getTime()) || isNaN(b.getTime()) || b < a) return from ? [from] : [];
+  const out = [];
+  for (let d = new Date(a), g = 0; d <= b && g < 90; d.setDate(d.getDate() + 1), g++) out.push(isoOf(d));
+  return out;
 }
 // True when at least one employee has DTR rows uploaded for this period.
 function periodHasDtr(data, pid) {
@@ -898,10 +933,40 @@ app.post('/api/admin/leave-requests/:id', canDecide, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Leave request not found.' });
   db.prepare('UPDATE leave_requests SET status = ?, reviewed_by = ?, reviewed_at = datetime(\'now\') WHERE id = ?')
     .run(decision, req.user.id, req.params.id);
+
+  // Reflect the decision in the DTR so it flows into payroll (SIL credits / leave
+  // pay) automatically — no manual ticking. Approve → write a paid-leave day per
+  // date into the employee's correct (open) branch period; reject → remove the
+  // leave-only rows we added. Worked/absent days already recorded are left alone.
+  let companyChanged = false;
+  try {
+    const data = getCompanyData();
+    const emp = findEmpByCode(data, row.employee_code);
+    if (emp) {
+      let touched = false;
+      datesInRange(row.date_from, row.date_to).forEach(function (date) {
+        const period = periodForDateLoc(data, date, emp.locationId);
+        if (!period || period.status === 'finalized') return;
+        data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
+        const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+        const idx = days.findIndex(function (d) { return d.date === date; });
+        if (decision === 'approved') {
+          if (idx < 0) { days.push({ date: date, leaveType: row.leave_type, leavePaid: true, dayType: 'regular' }); touched = true; }
+          else if (!days[idx].timeIn && !days[idx].timeOut && !days[idx].absent) {
+            days[idx].leaveType = row.leave_type; days[idx].leavePaid = true; touched = true; // tag a blank/rest day as leave
+          }
+        } else if (idx >= 0 && days[idx].leaveType === row.leave_type && !days[idx].timeIn && !days[idx].timeOut) {
+          days.splice(idx, 1); touched = true; // undo a leave-only row
+        }
+      });
+      if (touched) { try { saveCompanyData(data); companyChanged = true; } catch (e) { /* status still set; reconcile will retry */ } }
+    }
+  } catch (e) { console.error('leave DTR sync failed', e.message); }
+
   notify(row.user_id, 'leave', 'Leave ' + decision,
     row.leave_type + ' leave for ' + row.date_from + (row.date_to !== row.date_from ? ' → ' + row.date_to : '') + ' was ' + decision + '.');
   audit(req, decision, 'leave request', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.leave_type + ' ' + row.date_from + '→' + row.date_to + ' ' + decision);
-  res.json({ ok: true });
+  res.json({ ok: true, companyChanged: companyChanged });
 });
 
 /* ---- overtime authorization (admin review) ---- */

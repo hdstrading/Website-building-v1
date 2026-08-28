@@ -243,7 +243,12 @@
         if (ok) ok.onclick = function () { decide(lid, 'approved'); };
         if (no) no.onclick = function () { decide(lid, 'rejected'); };
       });
-      function decide(lid, d) { api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function () { renderTab('leave'); }); }
+      function decide(lid, d) {
+        api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function (r) {
+          if (r.body && r.body.companyChanged) refreshCompany(); // DTR updated server-side (leave applied)
+          renderTab('leave');
+        });
+      }
       drawLeaveCalendar(reqs);
     }
 
