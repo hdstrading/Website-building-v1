@@ -2476,10 +2476,10 @@
           '<small class="hint">After the first hour, OT accrues in these blocks — e.g. 30 minutes.</small>') +
         field('Grace / rounding threshold (minutes)',
           '<input id="otGrace" type="number" value="' + (ot.graceMinutes != null ? ot.graceMinutes : 5) + '">' +
-          '<small class="hint">Within this many minutes of a block, round up. e.g. 5 → clock-out 5:58 counts as 6:00 (1 hour).</small>') +
+          '<small class="hint">Applies only to blocks after the first hour: within this many minutes of a block, round up. e.g. 5 → 25 min into a 30-min block counts as 30. The first hour itself must always be completed in full.</small>') +
         field('Late employees forfeit first OT hour',
           select('otLateForfeit', [['true','Yes — a late employee loses the first OT hour'],['false','No — treat OT the same for everyone']], String(ot.lateForfeitsFirstHour !== false)) +
-          '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited and OT is only counted in complete whole hours after that.</small>') +
+          '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited; the remaining OT is still counted in the usual blocks. e.g. late + 2h30m OT → 1h30m.</small>') +
         field('Require overtime authorization',
           select('otRequireAuth', [['true','Yes — pay overtime only when authorized'],['false','No — pay all overtime from the DTR']], String(ot.requireAuthorization !== false)) +
           '<small class="hint">When on, both post-shift OT and pre-shift (early time-in) OT are paid only for dates an employee filed and an admin approved. Unauthorized OT (and early time-in) is not paid.</small>') +
