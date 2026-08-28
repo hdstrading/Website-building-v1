@@ -445,10 +445,11 @@ function periodHasDtr(data, pid) {
 
 /* ---------- overtime authorization computation ----------
  * Mirrors assets/js/dtr.js applyOtRules so filed OT is credited exactly like
- * DTR-derived OT: the first hour must be completed in full (no grace), then the
- * remainder is counted in 30-min blocks with a 5-min leeway, and — if the
- * employee was late beyond the grace window — the first OT hour is forfeited
- * while the remainder is still credited in the same 30-min blocks.
+ * DTR-derived OT: time rounds to 30-min blocks with a 5-min leeway (the leeway
+ * covers the first hour too, so 55 min -> 60), OT is credited only once the
+ * first hour is reached, and — if the employee was late beyond the grace
+ * window — the first OT hour is forfeited while the remainder is still
+ * credited in the same 30-min blocks.
  */
 function hmToMin(s) { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || '')); return m ? (+m[1]) * 60 + (+m[2]) : null; }
 function applyOtRulesSrv(otRaw, rules, lateMinutes) {
@@ -459,17 +460,16 @@ function applyOtRulesSrv(otRaw, rules, lateMinutes) {
   const grace = rules.graceMinutes != null ? rules.graceMinutes : 5;
   const minM = rules.minMinutes != null ? rules.minMinutes : 60;
   const late = lateMinutes || 0;
-  // The first hour must be completed in full to unlock any OT (no leeway here).
-  if (otRaw < minM) return 0;
-  // Time beyond the first hour is credited in `inc`-minute blocks; a block
-  // counts once the employee is within `grace` minutes of completing it.
-  const beyond = otRaw - minM;
-  let blocks = Math.floor(beyond / inc);
-  if (beyond - blocks * inc >= inc - grace) blocks += 1;
-  const creditedBeyond = blocks * inc;
+  // Round to `inc`-minute blocks, crediting a block once within `grace` of
+  // completing it (the leeway applies to the first hour too, e.g. 55 -> 60).
+  let blocks = Math.floor(otRaw / inc);
+  if (otRaw - blocks * inc >= inc - grace) blocks += 1;
+  const rounded = blocks * inc;
+  // The first hour must be reached (after rounding) to unlock any OT.
+  if (rounded < minM) return 0;
   // Being late (> grace) forfeits the first hour; the rest still counts.
-  if (late > grace && rules.lateForfeitsFirstHour !== false) return creditedBeyond;
-  return minM + creditedBeyond;
+  if (late > grace && rules.lateForfeitsFirstHour !== false) return rounded - minM;
+  return rounded;
 }
 // Effective shift for an employee on a specific date. A per-weekday entry in
 // emp.weekSchedule overrides the base shift field-by-field; blanks fall back.

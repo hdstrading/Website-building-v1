@@ -95,14 +95,13 @@
 
   /* Apply the company overtime policy to a raw OT minute count.
    * Rules (all configurable):
-   *  - The first block of `minMinutes` (default 60, "the first hour") must be
-   *    COMPLETED in full before any OT is credited — no grace on this threshold.
-   *    e.g. 55 min -> 0; 59 min -> 0; 60 min -> 60.
-   *  - Beyond the first hour, time is counted in `incrementMinutes` blocks
-   *    (default 30). A block is credited once the employee is within
-   *    `graceMinutes` (default 5) of completing it; otherwise it is dropped.
-   *    e.g. +25 min -> +30 (1h25m -> 1h30m); +55 min -> +60 (1h55m -> 2h);
-   *         +24 min -> +0 (1h24m -> 1h).
+   *  - Time is counted in `incrementMinutes` blocks (default 30). A block is
+   *    credited once the employee is within `graceMinutes` (default 5) of
+   *    completing it; otherwise it is dropped. The grace applies to every block,
+   *    including the first hour — e.g. 55 min -> 60, but 54 min -> 30.
+   *  - OT is only credited once the first block of `minMinutes` (default 60,
+   *    "the first hour") is reached (after the grace rounding). Below that,
+   *    OT = 0. e.g. 55 min -> 60; 40 min -> 0; 1h25m -> 1h30m; 1h55m -> 2h.
    *  - Late penalty (when `lateForfeitsFirstHour` is on, default): if the
    *    employee is late by more than `graceMinutes`, the first OT hour is
    *    forfeited; the remainder is still credited in the same 30-min blocks.
@@ -117,19 +116,18 @@
     var minM = rules.minMinutes != null ? rules.minMinutes : 60;
     var late = lateMinutes || 0;
 
-    // The first hour must be completed in full to unlock any OT (no leeway here).
-    if (otRaw < minM) return 0;
+    // Round to `inc`-minute blocks, crediting a block once within `grace` of
+    // completing it (the leeway applies to the first hour too, e.g. 55 -> 60).
+    var blocks = Math.floor(otRaw / inc);
+    if (otRaw - blocks * inc >= inc - grace) blocks += 1;
+    var rounded = blocks * inc;
 
-    // Time beyond the first hour is credited in `inc`-minute blocks; a block
-    // counts once the employee is within `grace` minutes of completing it.
-    var beyond = otRaw - minM;
-    var blocks = Math.floor(beyond / inc);
-    if (beyond - blocks * inc >= inc - grace) blocks += 1;
-    var creditedBeyond = blocks * inc;
+    // The first hour must be reached (after rounding) to unlock any OT.
+    if (rounded < minM) return 0;
 
     // Being late (> grace) forfeits the first hour; the rest still counts.
-    if (late > grace && rules.lateForfeitsFirstHour !== false) return creditedBeyond;
-    return minM + creditedBeyond;
+    if (late > grace && rules.lateForfeitsFirstHour !== false) return rounded - minM;
+    return rounded;
   }
 
   /* Compute one day's figures.
