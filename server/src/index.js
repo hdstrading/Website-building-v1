@@ -1702,6 +1702,67 @@ app.get('/api/document/:id', A.requireAuth, (req, res) => {
   res.send(Buffer.from(d.data, 'base64'));
 });
 
+/* ---- remittance receipts (proof of paid SSS/PhilHealth/Pag-IBIG/BIR) ---- */
+const REMIT_AGENCIES = { sss: 'SSS', philhealth: 'PhilHealth', pagibig: 'Pag-IBIG', bir: 'BIR' };
+const REMIT_MIME = { 'image/jpeg': 1, 'image/png': 1, 'image/webp': 1, 'application/pdf': 1 };
+const remitViewers = A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor');
+const remitEditors = A.requireRole('superadmin', 'admin_payroll');
+function remitMeta(r) {
+  return { id: r.id, agency: r.agency, agencyLabel: REMIT_AGENCIES[r.agency] || r.agency,
+    period_key: r.period_key, location_id: r.location_id, mime: r.mime, file_name: r.file_name,
+    note: r.note, amount: r.amount, paid_at: r.paid_at, uploader_role: r.uploader_role, created_at: r.created_at };
+}
+// List receipts for an agency + month (optionally scoped to the reviewer's branch).
+app.get('/api/admin/remittance-receipts', remitViewers, (req, res) => {
+  const agency = String(req.query.agency || '').toLowerCase();
+  const periodKey = String(req.query.periodKey || '');
+  if (!REMIT_AGENCIES[agency]) return res.status(400).json({ error: 'Unknown agency.' });
+  if (!/^\d{4}-\d{2}$/.test(periodKey)) return res.status(400).json({ error: 'Bad month.' });
+  let rows = db.prepare('SELECT * FROM remittance_receipts WHERE agency = ? AND period_key = ? ORDER BY created_at DESC').all(agency, periodKey);
+  if (req.user.location_id) rows = rows.filter(function (r) { return !r.location_id || r.location_id === req.user.location_id; });
+  res.json({ receipts: rows.map(remitMeta) });
+});
+app.post('/api/admin/remittance-receipts', remitEditors, (req, res) => {
+  const b = req.body || {};
+  const agency = String(b.agency || '').toLowerCase();
+  const periodKey = String(b.periodKey || '');
+  if (!REMIT_AGENCIES[agency]) return res.status(400).json({ error: 'Choose SSS, PhilHealth, Pag-IBIG or BIR.' });
+  if (!/^\d{4}-\d{2}$/.test(periodKey)) return res.status(400).json({ error: 'Choose the month the payment is for.' });
+  const parsed = parseDataUrl(b.dataUrl);
+  if (!parsed || !REMIT_MIME[parsed.mime]) return res.status(400).json({ error: 'Attach a JPG, PNG, WEBP or PDF receipt.' });
+  if (parsed.b64.length > 6.8 * 1024 * 1024) return res.status(400).json({ error: 'That file is too large (max ~5 MB).' });
+  // A branch-scoped admin can only file against their own location; company-wide
+  // admins may leave it blank (all locations) or target a specific branch.
+  let locationId = b.locationId ? String(b.locationId) : null;
+  if (req.user.location_id) locationId = req.user.location_id;
+  const amount = (b.amount === '' || b.amount == null) ? null : Number(b.amount);
+  const info = db.prepare(
+    'INSERT INTO remittance_receipts (agency, period_key, location_id, mime, file_name, data, note, amount, paid_at, uploaded_by, uploader_role) ' +
+    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(agency, periodKey, locationId, parsed.mime, String(b.fileName || '').slice(0, 200), parsed.b64,
+    String(b.note || '').slice(0, 500), (amount != null && isFinite(amount)) ? amount : null,
+    b.paidAt ? String(b.paidAt).slice(0, 10) : null, req.user.id, req.user.role);
+  audit(req, 'create', 'remittance-receipt', (REMIT_AGENCIES[agency] || agency) + ' ' + periodKey + ' receipt attached');
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+app.delete('/api/admin/remittance-receipts/:id', remitEditors, (req, res) => {
+  const r = db.prepare('SELECT * FROM remittance_receipts WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found.' });
+  if (req.user.location_id && r.location_id && r.location_id !== req.user.location_id) return res.status(403).json({ error: 'Not allowed for this location.' });
+  db.prepare('DELETE FROM remittance_receipts WHERE id = ?').run(req.params.id);
+  audit(req, 'delete', 'remittance-receipt', (REMIT_AGENCIES[r.agency] || r.agency) + ' ' + r.period_key + ' receipt removed');
+  res.json({ ok: true });
+});
+// Serve one receipt's file (viewers only; branch-scoped where applicable).
+app.get('/api/remittance-receipt/:id', remitViewers, (req, res) => {
+  const r = db.prepare('SELECT * FROM remittance_receipts WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).end();
+  if (req.user.location_id && r.location_id && r.location_id !== req.user.location_id) return res.status(403).end();
+  res.set('Content-Type', r.mime);
+  res.set('Content-Disposition', 'inline; filename="receipt-' + r.id + '"');
+  res.send(Buffer.from(r.data, 'base64'));
+});
+
 /* ---- in-app notifications ---- */
 app.get('/api/me/notifications', A.requireAuth, (req, res) => {
   const items = db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(req.user.id);

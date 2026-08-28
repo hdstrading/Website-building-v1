@@ -1696,8 +1696,10 @@
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
     });
+    var remitKey = remitMonthKey(period);
     ['sss', 'philhealth', 'pagibig'].forEach(function (kind) {
       var monthLabel = remitMonthLabel(period);
+      initRemitReceipts(v, kind, remitKey);
       v.querySelector('[data-remit-print="' + kind + '"]').addEventListener('click', function () {
         printHTML(remitTitle(kind) + ' — ' + monthLabel,
           '<h2>' + esc(remitTitle(kind)) + '</h2>' +
@@ -1894,9 +1896,100 @@
   }
   function remittanceCard(kind, title, desc) {
     return card(title,
-      '<p class="muted">' + desc + '</p><div class="dtr-scroll">' + remittanceTable(kind) + '</div>',
+      '<p class="muted">' + desc + '</p><div class="dtr-scroll">' + remittanceTable(kind) + '</div>' +
+      (IS_ONLINE ? remitReceiptsBox(kind) : ''),
       '<button class="btn-sm" data-remit-print="' + kind + '">Download PDF / Print</button>' +
       '<button class="btn-sm" data-remit-csv="' + kind + '">Export CSV</button>');
+  }
+
+  /* ---- proof-of-payment receipts under each remittance / BIR report ---- */
+  function canEditRemit() { return PH.role === 'superadmin' || PH.role === 'admin_payroll'; }
+  // Canonical YYYY-MM the contribution/tax is for (coverage month of the period).
+  function remitMonthKey(period) {
+    var d = (period && (period.endDate || period.payDate || period.startDate)) || '';
+    if (/^\d{4}-\d{2}/.test(d)) return d.slice(0, 7);
+    var n = new Date();
+    return n.getFullYear() + '-' + ('0' + (n.getMonth() + 1)).slice(-2);
+  }
+  function remitReceiptsBox(kind) {
+    return '<div class="remit-rcpt" data-remit-receipts="' + kind + '" style="margin-top:12px;border-top:1px solid #e2e8f0;padding-top:10px">' +
+      '<div style="font-weight:600;font-size:13px;margin-bottom:6px">📎 Proof of payment (official receipts)</div>' +
+      '<div data-rcpt-list><p class="muted" style="font-size:12px">Loading…</p></div>' +
+      (canEditRemit()
+        ? '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">' +
+          '<input type="file" data-rcpt-file="' + kind + '" accept="image/jpeg,image/png,image/webp,application/pdf" style="font-size:12px">' +
+          '<input type="text" data-rcpt-note="' + kind + '" placeholder="OR / reference no. (optional)" style="font-size:12px;padding:3px 6px">' +
+          '<button class="btn-sm" data-rcpt-up="' + kind + '">Attach receipt</button>' +
+          '</div>'
+        : '') +
+      '</div>';
+  }
+  // Fetch + render the receipt list for one agency/month into its card.
+  function loadRemitReceipts(v, kind, monthKey) {
+    var box = v.querySelector('[data-remit-receipts="' + kind + '"]'); if (!box) return;
+    var list = box.querySelector('[data-rcpt-list]'); if (!list) return;
+    fetch('/api/admin/remittance-receipts?agency=' + kind + '&periodKey=' + encodeURIComponent(monthKey),
+      { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = (j && j.receipts) || [];
+        if (!rows.length) { list.innerHTML = '<p class="muted" style="font-size:12px">No receipts attached for ' + esc(monthKey) + '.</p>'; return; }
+        list.innerHTML = rows.map(function (t) {
+          var icon = t.mime === 'application/pdf' ? '📄' : '🖼️';
+          var amt = (t.amount != null && t.amount !== '') ? ' • ₱' + money(t.amount) : '';
+          return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0">' +
+            '<a href="/api/remittance-receipt/' + t.id + '" target="_blank" style="text-decoration:none">' + icon + ' ' + esc(t.file_name || ('receipt-' + t.id)) + '</a>' +
+            (t.note ? '<span class="muted">' + esc(t.note) + '</span>' : '') +
+            '<span class="muted">' + esc((t.paid_at || t.created_at || '').slice(0, 10)) + amt + '</span>' +
+            (canEditRemit() ? '<button class="btn-sm" data-rcpt-del="' + t.id + '" title="Remove" style="margin-left:auto">✕</button>' : '') +
+            '</div>';
+        }).join('');
+        if (canEditRemit()) list.querySelectorAll('[data-rcpt-del]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            if (!confirm('Remove this receipt?')) return;
+            fetch('/api/admin/remittance-receipts/' + b.getAttribute('data-rcpt-del'),
+              { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
+              .then(function (r) { return r.json(); })
+              .then(function () { loadRemitReceipts(v, kind, monthKey); });
+          });
+        });
+      })
+      .catch(function () { list.innerHTML = '<p class="muted" style="font-size:12px">Could not load receipts.</p>'; });
+  }
+  function wireRemitUpload(v, kind, monthKey) {
+    var box = v.querySelector('[data-remit-receipts="' + kind + '"]'); if (!box) return;
+    var btn = box.querySelector('[data-rcpt-up="' + kind + '"]'); if (!btn) return;
+    btn.addEventListener('click', function () {
+      var fi = box.querySelector('[data-rcpt-file="' + kind + '"]');
+      var note = box.querySelector('[data-rcpt-note="' + kind + '"]');
+      var f = fi && fi.files && fi.files[0];
+      if (!f) { toast('Choose a receipt file first.'); return; }
+      if (f.size > 6 * 1024 * 1024) { toast('File too large (max ~5 MB).'); return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        btn.disabled = true;
+        fetch('/api/admin/remittance-receipts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agency: kind, periodKey: monthKey, dataUrl: reader.result, fileName: f.name, note: note ? note.value : '' })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            btn.disabled = false;
+            if (j && j.error) { toast(j.error); return; }
+            if (fi) fi.value = ''; if (note) note.value = '';
+            toast('Receipt attached.');
+            loadRemitReceipts(v, kind, monthKey);
+          })
+          .catch(function () { btn.disabled = false; toast('Upload failed.'); });
+      };
+      reader.readAsDataURL(f);
+    });
+  }
+  // Wire the receipts box (list + upload) for an agency in the current view.
+  function initRemitReceipts(v, kind, monthKey) {
+    if (!IS_ONLINE) return;
+    loadRemitReceipts(v, kind, monthKey);
+    if (canEditRemit()) wireRemitUpload(v, kind, monthKey);
   }
   function exportRemittanceCSV(kind, monthLabel) {
     var data = remittanceData(kind);
@@ -2202,7 +2295,7 @@
       card('1601-C — Monthly Remittance of Tax Withheld on Compensation',
         '<div class="inline"><label class="fld" style="max-width:180px"><span class="fld-label">Month</span>' +
         select('birMonth', MONTHS.map(function (m, i) { return [String(i), m]; }), String(defMonth)) + '</label></div>' +
-        c1601,
+        c1601 + (IS_ONLINE ? remitReceiptsBox('bir') : ''),
         monthPeriods.length ? '<button class="btn-sm" id="bir1601Print">Download PDF / Print</button>' +
           '<button class="btn-sm" id="bir1601Csv">Export CSV</button>' : '') +
       card('2316 — Certificate of Compensation Payment / Tax Withheld (annual)',
@@ -2214,6 +2307,7 @@
           : '<p class="muted">No active employees.</p>'),
         emps.length ? '<button class="btn-sm" id="bir2316All">Print All Certificates</button>' : '');
 
+    initRemitReceipts(v, 'bir', year + '-' + ('0' + (defMonth + 1)).slice(-2));
     v.querySelector('[name=birYear]').addEventListener('change', function (e) {
       state.birYear = parseInt(e.target.value, 10); state.birMonth = null; renderView();
     });
