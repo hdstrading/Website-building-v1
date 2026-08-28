@@ -321,11 +321,38 @@ function notifyAll(users, type, title, body) { users.forEach(function (u) { noti
 
 // Daily maintenance: create upcoming periods, send cutoff reminders, and
 // auto-compute a draft payroll once a cutoff has ended (admin reviews & finalizes).
+// Self-heal: make sure every APPROVED WFH/Field filing has its flat DTR day in
+// the employee's correct (branch) open period. Repairs filings that were written
+// to the wrong branch before the location-aware fix, and is idempotent (only adds
+// a missing row; never touches finalized periods or existing rows).
+function reconcileWfhDtr(data) {
+  let changed = false;
+  let rows;
+  try { rows = db.prepare("SELECT employee_code, work_date, mode, time_in, time_out FROM wfh_requests WHERE status = 'approved'").all(); }
+  catch (e) { return false; }
+  rows.forEach(function (w) {
+    if (!w.employee_code) return;
+    const emp = findEmpByCode(data, w.employee_code);
+    if (!emp) return;
+    const period = periodForDateLoc(data, w.work_date, emp.locationId);
+    if (!period || period.status === 'finalized') return;
+    data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
+    const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+    const ex = days.find(function (d) { return d.date === w.work_date; });
+    if (ex && ex.workMode) return; // already present (correct)
+    const rowObj = { date: w.work_date, timeIn: w.time_in, timeOut: w.time_out, workMode: w.mode, dayType: 'regular', absent: false };
+    if (ex) Object.assign(ex, rowObj); else days.push(rowObj);
+    changed = true;
+  });
+  return changed;
+}
+
 function runDailyJobs() {
   try {
     const data = getCompanyData();
     const today = todayLocal();
     let changed = ensurePeriods(data, today);
+    if (reconcileWfhDtr(data)) changed = true;
     (data.periods || []).forEach(function (p) {
       if (p.status === 'finalized') return;
       const end = parseDateLocal(p.endDate);
@@ -354,14 +381,25 @@ function runDailyJobs() {
     if (changed) saveCompanyData(data);
   } catch (e) { console.error('runDailyJobs failed', e.message); }
 }
-// The next chronological non-finalized period after a given one (for OT carry-over).
+// The next chronological non-finalized period after a given one (for OT carry-over),
+// within the same branch (so carried pay stays in the employee's location).
 function nextOpenPeriod(data, afterPeriod) {
+  const loc = afterPeriod.locationId || null;
   return (data.periods || [])
-    .filter(function (p) { return p.status !== 'finalized' && p.startDate > afterPeriod.endDate; })
+    .filter(function (p) { return p.status !== 'finalized' && p.startDate > afterPeriod.endDate && (p.locationId || null) === loc; })
     .sort(function (a, b) { return a.startDate < b.startDate ? -1 : 1; })[0] || null;
 }
 function periodForDate(data, dateStr) {
   return (data.periods || []).find(function (p) { return dateStr >= p.startDate && dateStr <= p.endDate; }) || null;
+}
+// Location-aware: with per-location periods (multi-branch), several periods cover
+// the same dates, so pick the one for the employee's branch. Falls back to a
+// shared (no-location) period, then any period covering the date.
+function periodForDateLoc(data, dateStr, loc) {
+  const inRange = (data.periods || []).filter(function (p) { return dateStr >= p.startDate && dateStr <= p.endDate; });
+  return inRange.find(function (p) { return (p.locationId || null) === (loc || null); })
+    || inRange.find(function (p) { return !p.locationId; })
+    || inRange[0] || null;
 }
 // True when at least one employee has DTR rows uploaded for this period.
 function periodHasDtr(data, pid) {
@@ -899,7 +937,7 @@ app.post('/api/admin/overtime-requests/:id', canDecide, (req, res) => {
     // Carry-over: if the OT's own cutoff is already finalized, the pay can't go
     // into that (locked) period — credit it to the next open cutoff instead.
     if (decision === 'approved') {
-      const otPeriod = periodForDate(data, row.ot_date);
+      const otPeriod = periodForDateLoc(data, row.ot_date, emp.locationId);
       if (otPeriod && otPeriod.status === 'finalized') {
         const dtrDay = (((data.dtr || {})[otPeriod.id] || {})[emp.id] || []).find(function (d) { return d.date === row.ot_date; });
         const next = nextOpenPeriod(data, otPeriod);
@@ -1020,7 +1058,7 @@ app.post('/api/admin/wfh-requests/:id', canDecide, (req, res) => {
   let note = '', companyChanged = false;
   if (decision === 'approved') {
     if (!emp) return res.status(400).json({ error: 'This filing is not linked to an employee record.' });
-    const period = periodForDate(data, row.work_date);
+    const period = periodForDateLoc(data, row.work_date, emp.locationId);
     if (!period) return res.status(400).json({ error: 'No payroll period covers ' + row.work_date + '. Create the period first, then approve.' });
     if (period.status === 'finalized') {
       note = ' Its cut-off is already finalized, so it was not added to that (locked) payroll.';
@@ -1034,7 +1072,7 @@ app.post('/api/admin/wfh-requests/:id', canDecide, (req, res) => {
     }
   } else if (decision === 'rejected' && row.status === 'approved') {
     // Undo a previously approved DTR day when reversing the decision.
-    const period = periodForDate(data, row.work_date);
+    const period = periodForDateLoc(data, row.work_date, emp && emp.locationId);
     if (period && period.status !== 'finalized' && emp) {
       const days = ((data.dtr || {})[period.id] || {})[emp.id];
       if (days) {
