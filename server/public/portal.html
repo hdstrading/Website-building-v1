@@ -1368,10 +1368,76 @@
       document.getElementById('slipView').innerHTML =
         '<div class="card"><div class="in" style="overflow:auto">' +
         '<style>' + PSLIP_CSS + '</style>' + payslipInner(x) +
+        '<div id="ackBox" style="margin-top:14px"></div>' +
         '<div style="margin-top:12px;text-align:right"><button class="btn" id="slipPrint">Print / Save PDF</button></div>' +
         '</div></div>';
       document.getElementById('slipPrint').addEventListener('click', function () { printPayslip(x); });
+      renderAckBox(x);
       document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
+    }
+    // Accept / Dispute sign-off on the payslip. Accept records a typed name;
+    // Dispute records a reason (and alerts payroll). Shows the recorded state
+    // once acted, with a link to change the response.
+    function renderAckBox(x, forceForm) {
+      var box = document.getElementById('ackBox'); if (!box) return;
+      var a = x.ack;
+      if (a && a.status && !forceForm) {
+        var when = String(a.at || '').replace('T', ' ').slice(0, 16);
+        if (a.status === 'accepted') {
+          box.innerHTML = '<div style="border:1px solid #0a7d33;background:#e9f9ee;color:#0a5a26;border-radius:8px;padding:10px 12px">' +
+            '✔ <b>Payslip accepted</b> — acknowledged by <b>' + esc(a.signedName || '') + '</b>' + (when ? ' on ' + esc(when) : '') + '. ' +
+            '<a href="#" id="ackChange" style="margin-left:6px">Change response</a></div>';
+        } else {
+          box.innerHTML = '<div style="border:1px solid #b00020;background:#fdecee;color:#8a0016;border-radius:8px;padding:10px 12px">' +
+            '⚑ <b>Payslip disputed</b>' + (when ? ' on ' + esc(when) : '') + '.<br><span class="muted">Reason:</span> ' + esc(a.disputeReason || '') + ' ' +
+            '<a href="#" id="ackChange" style="margin-left:6px">Update response</a></div>';
+        }
+        var ch = document.getElementById('ackChange');
+        if (ch) ch.addEventListener('click', function (e) { e.preventDefault(); renderAckBox(x, true); });
+        return;
+      }
+      box.innerHTML =
+        '<div style="border:1px solid #d9dee7;border-radius:8px;padding:12px">' +
+        '<div style="font-weight:600;margin-bottom:8px">Payslip acknowledgement</div>' +
+        '<p class="muted" style="margin:0 0 8px">Please review your payslip, then accept it or raise a dispute.</p>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">' +
+        '<button class="btn" id="ackAcceptBtn" style="background:#0a7d33">✔ Accept</button>' +
+        '<button class="btn" id="ackDisputeBtn" style="background:#b00020">⚑ Dispute</button></div>' +
+        '<div id="ackAcceptForm" style="display:none">' +
+        '<label style="font-size:13px">Type your full name to acknowledge this payslip:</label>' +
+        '<input id="ackName" type="text" placeholder="Full name" style="width:100%;margin:4px 0 8px;padding:6px;box-sizing:border-box">' +
+        '<button class="btn sm" id="ackAcceptSubmit">Confirm acceptance</button></div>' +
+        '<div id="ackDisputeForm" style="display:none">' +
+        '<label style="font-size:13px">Describe the reason for your dispute:</label>' +
+        '<textarea id="ackReason" rows="4" placeholder="What is incorrect on this payslip?" style="width:100%;margin:4px 0 8px;padding:6px;box-sizing:border-box"></textarea>' +
+        '<button class="btn sm" id="ackDisputeSubmit">Submit dispute</button></div>' +
+        '</div>';
+      document.getElementById('ackAcceptBtn').addEventListener('click', function () {
+        document.getElementById('ackAcceptForm').style.display = 'block';
+        document.getElementById('ackDisputeForm').style.display = 'none';
+      });
+      document.getElementById('ackDisputeBtn').addEventListener('click', function () {
+        document.getElementById('ackDisputeForm').style.display = 'block';
+        document.getElementById('ackAcceptForm').style.display = 'none';
+      });
+      document.getElementById('ackAcceptSubmit').addEventListener('click', function () {
+        var name = (document.getElementById('ackName').value || '').trim();
+        if (!name) { alert('Please type your full name to acknowledge the payslip.'); return; }
+        submitAck(x, 'accepted', { signedName: name });
+      });
+      document.getElementById('ackDisputeSubmit').addEventListener('click', function () {
+        var reason = (document.getElementById('ackReason').value || '').trim();
+        if (!reason) { alert('Please describe the reason for your dispute.'); return; }
+        submitAck(x, 'disputed', { disputeReason: reason });
+      });
+    }
+    function submitAck(x, status, extra) {
+      var payload = Object.assign({ periodId: x.period.id, status: status }, extra);
+      api('/api/me/payslip-ack', { method: 'POST', body: JSON.stringify(payload) }).then(function (r) {
+        if (!r.ok || (r.body && r.body.error)) { alert((r.body && r.body.error) || 'Could not save your response.'); return; }
+        x.ack = { status: status, signedName: extra.signedName || '', disputeReason: extra.disputeReason || '', at: new Date().toISOString() };
+        renderAckBox(x);
+      });
     }
 
     // ---- My Documents ----

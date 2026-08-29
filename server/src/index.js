@@ -2224,6 +2224,9 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
   if (emp) {
     const loansById = {};
     (data.loans || []).forEach(function (l) { loansById[l.id] = l; });
+    const ackByPeriod = {};
+    db.prepare('SELECT period_id, status, signed_name, dispute_reason, updated_at FROM payslip_ack WHERE user_id = ?')
+      .all(req.user.id).forEach(function (a) { ackByPeriod[a.period_id] = a; });
     (data.periods || []).forEach(function (p) {
       var r = (data.payrolls[p.id] || {})[emp.id];
       if (!r || p.status !== 'finalized') return;
@@ -2234,10 +2237,68 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
         var l = loansById[ld.id] || {};
         return Object.assign({}, ld, { balance: l.balance != null ? l.balance : null, reference: l.reference || '' });
       });
-      out.push({ period: p, result: result });
+      var a = ackByPeriod[p.id] || null;
+      out.push({ period: p, result: result, ack: a ? {
+        status: a.status, signedName: a.signed_name, disputeReason: a.dispute_reason, at: a.updated_at
+      } : null });
     });
   }
   res.json({ payslips: out });
+});
+// Employee accepts or disputes a finalized payslip. Accept requires a typed
+// name; dispute requires a reason. A dispute notifies the payroll admins.
+app.post('/api/me/payslip-ack', A.requireAuth, (req, res) => {
+  const b = req.body || {};
+  const periodId = String(b.periodId || '');
+  const status = b.status === 'disputed' ? 'disputed' : (b.status === 'accepted' ? 'accepted' : '');
+  if (!periodId || !status) return res.status(400).json({ error: 'Bad request.' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, req.user.employee_code);
+  const period = (data.periods || []).find(function (p) { return p.id === periodId; });
+  if (!emp || !period || period.status !== 'finalized') return res.status(404).json({ error: 'Payslip not found.' });
+  const r = (data.payrolls[periodId] || {})[emp.id];
+  if (!r) return res.status(404).json({ error: 'Payslip not found.' });
+  const signedName = String(b.signedName || '').trim().slice(0, 120);
+  const reason = String(b.disputeReason || '').trim().slice(0, 2000);
+  if (status === 'accepted' && !signedName) return res.status(400).json({ error: 'Type your full name to acknowledge the payslip.' });
+  if (status === 'disputed' && !reason) return res.status(400).json({ error: 'Please describe the reason for your dispute.' });
+  db.prepare(
+    'INSERT INTO payslip_ack (user_id, employee_code, period_id, status, signed_name, dispute_reason, net_pay, updated_at) ' +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) " +
+    'ON CONFLICT(user_id, period_id) DO UPDATE SET status = excluded.status, signed_name = excluded.signed_name, ' +
+    "dispute_reason = excluded.dispute_reason, net_pay = excluded.net_pay, updated_at = datetime('now')"
+  ).run(req.user.id, req.user.employee_code || null, periodId, status, signedName, reason,
+    (r.netPay != null ? r.netPay : null));
+  audit(req, status === 'disputed' ? 'dispute' : 'acknowledge', 'payslip',
+    period.name + ' ' + status + (status === 'disputed' ? (' — ' + reason.slice(0, 120)) : ''));
+  if (status === 'disputed') {
+    // Alert the payroll admins (branch-scoped) so they can review the dispute.
+    const admins = db.prepare("SELECT id, location_id FROM users WHERE role IN ('superadmin','admin_payroll') AND status = 'active'").all();
+    admins.forEach(function (u) {
+      if (u.location_id && emp.locationId && u.location_id !== emp.locationId) return;
+      notify(u.id, 'payslip', 'Payslip disputed',
+        (r.employeeName || req.user.employee_code || 'An employee') + ' disputed the ' + period.name + ' payslip: ' + reason.slice(0, 200));
+    });
+  }
+  res.json({ ok: true });
+});
+// Admin/reviewer view of payslip sign-off: who accepted, who disputed, and why.
+app.get('/api/admin/payslip-acks', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const data = getCompanyData();
+  const loc = {}; const pname = {};
+  (data.employees || []).forEach(function (e) { if (e.code) loc[e.code] = e.locationId || null; });
+  (data.periods || []).forEach(function (p) { pname[p.id] = p.name; });
+  const status = req.query.status; // optional 'disputed' | 'accepted'
+  let rows = db.prepare(
+    'SELECT a.*, u.full_name FROM payslip_ack a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.updated_at DESC LIMIT 500'
+  ).all();
+  if (status === 'disputed' || status === 'accepted') rows = rows.filter(function (r) { return r.status === status; });
+  if (req.user.location_id) rows = rows.filter(function (r) { return loc[r.employee_code] === req.user.location_id; });
+  res.json({ acks: rows.map(function (r) {
+    return { id: r.id, employee_code: r.employee_code, full_name: r.full_name, period_id: r.period_id,
+      period_name: pname[r.period_id] || r.period_id, status: r.status, signed_name: r.signed_name,
+      dispute_reason: r.dispute_reason, net_pay: r.net_pay, updated_at: r.updated_at };
+  }) });
 });
 // List active periods (for the employee DTR/leave pickers).
 app.get('/api/me/periods', A.requireAuth, (req, res) => {
