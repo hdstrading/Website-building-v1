@@ -61,7 +61,7 @@
     ov.className = 'acc-overlay';
     var isSuper = (window.__COMPANY__ && window.__COMPANY__.role === 'superadmin');
     ov.innerHTML = '<div class="acc-modal"><div class="acc-head"><b>Users &amp; Access</b><button class="acc-x">✕</button></div>' +
-      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="wfh">WFH / Field</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a><a data-at="bulletins">Bulletins</a>' +
+      '<div class="acc-tabs"><a class="active" data-at="approvals">Approvals</a><a data-at="users">All Users</a><a data-at="leave">Leave Requests</a><a data-at="overtime">Overtime</a><a data-at="wfh">WFH / Field</a><a data-at="loans">Loan Requests</a><a data-at="pcr">201 Changes</a><a data-at="documents">Documents</a><a data-at="bulletins">Bulletins</a><a data-at="payslips">Payslip Sign-off</a>' +
       (isSuper ? '<a data-at="history">History</a>' : '') + '</div>' +
       '<div class="acc-body" id="acc-body">Loading…</div></div>';
     document.body.appendChild(ov);
@@ -83,6 +83,7 @@
       if (tab === 'pcr') return api('/api/admin/profile-requests').then(function (r) { renderPcr(r.body.requests || []); });
       if (tab === 'documents') return renderDocuments();
       if (tab === 'bulletins') return renderBulletins();
+      if (tab === 'payslips') return api('/api/admin/payslip-acks').then(function (r) { renderPayslipAcks((r.body || {}).acks || []); });
       if (tab === 'history') return api('/api/admin/audit-log').then(function (r) { renderHistory((r.body || {}).entries || []); });
       return api('/api/admin/users').then(function (r) { (tab === 'approvals' ? renderApprovals : renderUsers)(r.body.users || []); });
     }
@@ -340,6 +341,25 @@
     }
 
     function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function renderPayslipAcks(acks) {
+      var disputes = acks.filter(function (a) { return a.status === 'disputed'; }).length;
+      var head = '<p class="acc-muted">Employee sign-off on finalized payslips. A dispute also notifies payroll.' +
+        (disputes ? ' <b style="color:#b00020">' + disputes + ' open dispute' + (disputes > 1 ? 's' : '') + '.</b>' : '') + '</p>';
+      if (!acks.length) { body.innerHTML = head + '<p class="acc-muted">No payslip responses yet.</p>'; return; }
+      body.innerHTML = head +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Period</th><th>Response</th><th>Details</th><th>When (UTC)</th></tr></thead><tbody>' +
+        acks.map(function (a) {
+          var badge = a.status === 'disputed'
+            ? '<span class="acc-badge" style="background:#fdecee;color:#8a0016">⚑ Disputed</span>'
+            : '<span class="acc-badge" style="background:#e9f9ee;color:#0a5a26">✔ Accepted</span>';
+          var detail = a.status === 'disputed'
+            ? '<span style="color:#8a0016">' + esc(a.dispute_reason || '') + '</span>'
+            : 'Acknowledged by <b>' + esc(a.signed_name || '') + '</b>';
+          return '<tr><td>' + esc(a.full_name || a.employee_code || '—') + '</td><td>' + esc(a.period_name || '') + '</td>' +
+            '<td>' + badge + '</td><td>' + detail + '</td>' +
+            '<td style="white-space:nowrap">' + esc(String(a.updated_at || '').replace('T', ' ').slice(0, 16)) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
     function renderLoans(reqs) {
       if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No loan applications.</p>'; return; }
       body.innerHTML = '<p class="acc-muted">Approving a loan creates an auto-deducted payroll loan on the employee. Set the amount taken each pay period.</p>' +

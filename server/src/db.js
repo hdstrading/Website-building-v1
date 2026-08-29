@@ -144,6 +144,26 @@ CREATE TABLE IF NOT EXISTS remittance_receipts (
 CREATE INDEX IF NOT EXISTS idx_remit_key ON remittance_receipts(agency, period_key);
 `);
 
+// Employee sign-off on a finalized payslip: either accepted (with a typed name
+// for acknowledgement) or disputed (with the reason). One row per employee per
+// period; a later submission replaces the earlier one.
+db.exec(`
+CREATE TABLE IF NOT EXISTS payslip_ack (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  employee_code TEXT,
+  period_id TEXT NOT NULL,
+  status TEXT NOT NULL,             -- 'accepted' | 'disputed'
+  signed_name TEXT DEFAULT '',      -- typed name on acceptance
+  dispute_reason TEXT DEFAULT '',   -- reason on dispute
+  net_pay REAL,                     -- snapshot of the net pay acknowledged
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, period_id)
+);
+CREATE INDEX IF NOT EXISTS idx_payack_period ON payslip_ack(period_id);
+`);
+
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }

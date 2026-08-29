@@ -949,8 +949,7 @@
         (d.date ? '<div class="sub">' + weekdayName(d.date) + '</div>' : '') + '</td>' +
         '<td style="text-align:center"><input name="worked" type="checkbox"' + (d.worked ? ' checked' : '') + '></td>' +
         '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
-        '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
-        '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
+        '<td>' + select('rdStatus', [['','—'],['rest','Rest day'],['absent','Absent']], d.absent ? 'absent' : (d.restDay ? 'rest' : '')) + '</td>' +
         '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
         '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
     }
@@ -963,8 +962,7 @@
         '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '"></td>' +
         '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : (emp.schedBreakMins != null ? emp.schedBreakMins : 60)) + '" style="width:56px"></td>' +
         '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
-        '<td style="text-align:center"><input name="restDay" type="checkbox"' + (d.restDay ? ' checked' : '') + '></td>' +
-        '<td style="text-align:center"><input name="absent" type="checkbox"' + (d.absent ? ' checked' : '') + '></td>' +
+        '<td>' + select('rdStatus', [['','—'],['rest','Rest day'],['absent','Absent']], d.absent ? 'absent' : (d.restDay ? 'rest' : '')) + '</td>' +
         '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
         '<td><button class="btn-sm btn-danger" data-row-del="' + i + '">✕</button></td></tr>';
     }
@@ -975,13 +973,13 @@
     }
     if (!days.length) days.push({});
     var header = isOutput
-      ? '<tr><th>Date</th><th>Worked</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr>'
-      : '<tr><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Day Type</th><th>Rest</th><th>Absent</th><th>Leave</th><th></th></tr>';
+      ? '<tr><th>Date</th><th>Worked</th><th>Day Type</th><th>Rest / Absent</th><th>Leave</th><th></th></tr>'
+      : '<tr><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Day Type</th><th>Rest / Absent</th><th>Leave</th><th></th></tr>';
     var intro = isOutput
       ? 'This is a <b>field / output-based</b> employee (paid ' + money(emp.basicSalary) + ' per day worked). ' +
         'Tick <b>Worked</b> for each day of field work — no time in/out needed. ' +
-        'Tick <b>Rest</b>/<b>Absent</b>, or pick a <b>Leave</b> type as usual. Working a rest day or holiday still earns the premium.'
-      : 'Just enter <b>In/Out</b> times, or tick <b>Rest</b> / <b>Absent</b>, or pick a <b>Leave</b> type (SL / VL / EL). Rest days are pre-ticked from the employee\'s rest day.';
+        'Set <b>Rest / Absent</b> (a day can be one or the other, not both), or pick a <b>Leave</b> type as usual. Working a rest day or holiday still earns the premium.'
+      : 'Just enter <b>In/Out</b> times, set <b>Rest / Absent</b> (a day can be one or the other, not both), or pick a <b>Leave</b> type (SL / VL / EL). Rest days are pre-set from the employee\'s rest day.';
     var body =
       '<p class="muted">Dates below are auto-filled from the period coverage' +
       (period && period.startDate ? ' (' + esc(period.startDate) + ' to ' + esc(period.endDate) + ')' : '') +
@@ -996,7 +994,9 @@
         var g = function (n) { var el = tr.querySelector('[name=' + n + ']'); return el; };
         var date = g('date').value;
         var leaveType = g('leaveType').value;
-        var restDay = g('restDay').checked, absent = g('absent').checked;
+        // Single Rest/Absent selector — a day can be one or the other, never both.
+        var rdEl = g('rdStatus'), rdv = rdEl ? rdEl.value : '';
+        var restDay = rdv === 'rest', absent = rdv === 'absent';
         if (isOutput) {
           var worked = g('worked').checked;
           // Skip completely empty rows.
