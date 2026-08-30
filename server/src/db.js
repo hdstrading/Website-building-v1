@@ -163,6 +163,11 @@ CREATE TABLE IF NOT EXISTS payslip_ack (
 );
 CREATE INDEX IF NOT EXISTS idx_payack_period ON payslip_ack(period_id);
 `);
+// Admin resolution of a disputed payslip (sent back to the employee to re-accept).
+try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolution TEXT"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_by INTEGER"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_role TEXT"); } catch (e) { /* column already present */ }
+try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_at TEXT"); } catch (e) { /* column already present */ }
 
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }

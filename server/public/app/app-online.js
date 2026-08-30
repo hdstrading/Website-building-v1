@@ -342,23 +342,49 @@
 
     function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
     function renderPayslipAcks(acks) {
+      // Open disputes first, then resolved, then accepted — so admins act on what needs action.
+      var order = { disputed: 0, resolved: 1, accepted: 2 };
+      acks = acks.slice().sort(function (a, b) { return (order[a.status] || 3) - (order[b.status] || 3); });
       var disputes = acks.filter(function (a) { return a.status === 'disputed'; }).length;
-      var head = '<p class="acc-muted">Employee sign-off on finalized payslips. A dispute also notifies payroll.' +
-        (disputes ? ' <b style="color:#b00020">' + disputes + ' open dispute' + (disputes > 1 ? 's' : '') + '.</b>' : '') + '</p>';
+      var head = '<p class="acc-muted">Employee sign-off on finalized payslips. Resolving a dispute notifies the employee to accept or dispute again.' +
+        (disputes ? ' <b style="color:#b00020">' + disputes + ' open dispute' + (disputes > 1 ? 's' : '') + ' to resolve.</b>' : '') + '</p>';
       if (!acks.length) { body.innerHTML = head + '<p class="acc-muted">No payslip responses yet.</p>'; return; }
       body.innerHTML = head +
-        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Period</th><th>Response</th><th>Details</th><th>When (UTC)</th></tr></thead><tbody>' +
+        '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Period</th><th>Response</th><th>Details</th><th>When (UTC)</th><th></th></tr></thead><tbody>' +
         acks.map(function (a) {
-          var badge = a.status === 'disputed'
-            ? '<span class="acc-badge" style="background:#fdecee;color:#8a0016">⚑ Disputed</span>'
-            : '<span class="acc-badge" style="background:#e9f9ee;color:#0a5a26">✔ Accepted</span>';
-          var detail = a.status === 'disputed'
-            ? '<span style="color:#8a0016">' + esc(a.dispute_reason || '') + '</span>'
-            : 'Acknowledged by <b>' + esc(a.signed_name || '') + '</b>';
-          return '<tr><td>' + esc(a.full_name || a.employee_code || '—') + '</td><td>' + esc(a.period_name || '') + '</td>' +
+          var badge, detail, action = '';
+          if (a.status === 'disputed') {
+            badge = '<span class="acc-badge" style="background:#fdecee;color:#8a0016">⚑ Disputed</span>';
+            detail = '<span style="color:#8a0016">' + esc(a.dispute_reason || '') + '</span>';
+            if (canManage) action = '<button class="acc-btn pa-resolve">Resolve</button>';
+          } else if (a.status === 'resolved') {
+            badge = '<span class="acc-badge" style="background:#eef4ff;color:#1e3a8a">↩ Resolved — awaiting employee</span>';
+            detail = '<span class="acc-muted">Disputed:</span> ' + esc(a.dispute_reason || '') +
+              '<br><span class="acc-muted">Resolution:</span> ' + esc(a.resolution || '');
+          } else {
+            badge = '<span class="acc-badge" style="background:#e9f9ee;color:#0a5a26">✔ Accepted</span>';
+            detail = 'Acknowledged by <b>' + esc(a.signed_name || '') + '</b>';
+          }
+          return '<tr data-aid="' + a.id + '"><td>' + esc(a.full_name || a.employee_code || '—') + '</td><td>' + esc(a.period_name || '') + '</td>' +
             '<td>' + badge + '</td><td>' + detail + '</td>' +
-            '<td style="white-space:nowrap">' + esc(String(a.updated_at || '').replace('T', ' ').slice(0, 16)) + '</td></tr>';
+            '<td style="white-space:nowrap">' + esc(String(a.updated_at || '').replace('T', ' ').slice(0, 16)) + '</td>' +
+            '<td class="acc-actions">' + action + '</td></tr>';
         }).join('') + '</tbody></table>';
+      if (canManage) body.querySelectorAll('.pa-resolve').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id = btn.closest('tr').dataset.aid;
+          var resolution = prompt('How was this dispute resolved? (this is sent to the employee)');
+          if (resolution == null) return;
+          resolution = resolution.trim();
+          if (!resolution) { alert('Please describe the resolution.'); return; }
+          btn.disabled = true;
+          api('/api/admin/payslip-acks/' + id + '/resolve', { method: 'POST', body: JSON.stringify({ resolution: resolution }) })
+            .then(function (r) {
+              if (!r.ok || (r.body && r.body.error)) { btn.disabled = false; alert((r.body && r.body.error) || 'Could not resolve.'); return; }
+              renderTab('payslips');
+            });
+        });
+      });
     }
     function renderLoans(reqs) {
       if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No loan applications.</p>'; return; }

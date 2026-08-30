@@ -2225,7 +2225,7 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
     const loansById = {};
     (data.loans || []).forEach(function (l) { loansById[l.id] = l; });
     const ackByPeriod = {};
-    db.prepare('SELECT period_id, status, signed_name, dispute_reason, updated_at FROM payslip_ack WHERE user_id = ?')
+    db.prepare('SELECT period_id, status, signed_name, dispute_reason, resolution, resolved_at, updated_at FROM payslip_ack WHERE user_id = ?')
       .all(req.user.id).forEach(function (a) { ackByPeriod[a.period_id] = a; });
     (data.periods || []).forEach(function (p) {
       var r = (data.payrolls[p.id] || {})[emp.id];
@@ -2239,7 +2239,8 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
       });
       var a = ackByPeriod[p.id] || null;
       out.push({ period: p, result: result, ack: a ? {
-        status: a.status, signedName: a.signed_name, disputeReason: a.dispute_reason, at: a.updated_at
+        status: a.status, signedName: a.signed_name, disputeReason: a.dispute_reason,
+        resolution: a.resolution || '', resolvedAt: a.resolved_at || '', at: a.updated_at
       } : null });
     });
   }
@@ -2262,11 +2263,14 @@ app.post('/api/me/payslip-ack', A.requireAuth, (req, res) => {
   const reason = String(b.disputeReason || '').trim().slice(0, 2000);
   if (status === 'accepted' && !signedName) return res.status(400).json({ error: 'Type your full name to acknowledge the payslip.' });
   if (status === 'disputed' && !reason) return res.status(400).json({ error: 'Please describe the reason for your dispute.' });
+  // A fresh employee response clears any prior admin resolution (a re-dispute
+  // starts a new round; an acceptance closes it out).
   db.prepare(
     'INSERT INTO payslip_ack (user_id, employee_code, period_id, status, signed_name, dispute_reason, net_pay, updated_at) ' +
     "VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now')) " +
     'ON CONFLICT(user_id, period_id) DO UPDATE SET status = excluded.status, signed_name = excluded.signed_name, ' +
-    "dispute_reason = excluded.dispute_reason, net_pay = excluded.net_pay, updated_at = datetime('now')"
+    "dispute_reason = excluded.dispute_reason, net_pay = excluded.net_pay, updated_at = datetime('now'), " +
+    'resolution = NULL, resolved_by = NULL, resolved_role = NULL, resolved_at = NULL'
   ).run(req.user.id, req.user.employee_code || null, periodId, status, signedName, reason,
     (r.netPay != null ? r.netPay : null));
   audit(req, status === 'disputed' ? 'dispute' : 'acknowledge', 'payslip',
@@ -2297,8 +2301,32 @@ app.get('/api/admin/payslip-acks', A.requireRole('superadmin', 'admin_payroll', 
   res.json({ acks: rows.map(function (r) {
     return { id: r.id, employee_code: r.employee_code, full_name: r.full_name, period_id: r.period_id,
       period_name: pname[r.period_id] || r.period_id, status: r.status, signed_name: r.signed_name,
-      dispute_reason: r.dispute_reason, net_pay: r.net_pay, updated_at: r.updated_at };
+      dispute_reason: r.dispute_reason, net_pay: r.net_pay, updated_at: r.updated_at,
+      resolution: r.resolution || '', resolved_at: r.resolved_at || '' };
   }) });
+});
+// Payroll/super admins resolve a disputed payslip, sending it back to the
+// employee (who is notified and can then accept or dispute again).
+app.post('/api/admin/payslip-acks/:id/resolve', A.requireRole('superadmin', 'admin_payroll'), (req, res) => {
+  const resolution = String((req.body || {}).resolution || '').trim().slice(0, 2000);
+  if (!resolution) return res.status(400).json({ error: 'Enter how the dispute was resolved.' });
+  const a = db.prepare('SELECT * FROM payslip_ack WHERE id = ?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'Not found.' });
+  if (a.status !== 'disputed') return res.status(400).json({ error: 'Only an open dispute can be resolved.' });
+  // Location scope: a branch admin only resolves their own branch's disputes.
+  if (req.user.location_id) {
+    const data = getCompanyData();
+    const emp = findEmpByCode(data, a.employee_code);
+    if (!emp || (emp.locationId || null) !== req.user.location_id) return res.status(403).json({ error: 'Not allowed for this location.' });
+  }
+  db.prepare("UPDATE payslip_ack SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_role = ?, resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
+    .run(resolution, req.user.id, req.user.role, a.id);
+  const pname = ((getCompanyData().periods || []).find(function (p) { return p.id === a.period_id; }) || {}).name || a.period_id;
+  notify(a.user_id, 'payslip', 'Payslip dispute resolved',
+    'Your dispute on the ' + pname + ' payslip was resolved: ' + resolution.slice(0, 200) +
+    ' — please open the payslip to accept it or raise another dispute.');
+  audit(req, 'resolve', 'payslip', pname + ' dispute resolved — ' + resolution.slice(0, 120));
+  res.json({ ok: true });
 });
 // List active periods (for the employee DTR/leave pickers).
 app.get('/api/me/periods', A.requireAuth, (req, res) => {
