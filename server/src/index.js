@@ -373,6 +373,46 @@ function reconcileLeaveDtr(data) {
   return changed;
 }
 
+// All relational tables that snapshot an employee's code. When an employee's
+// code is renamed we rewrite the code in every one so login, payslips, request
+// history, documents and photos stay linked to the same person.
+const EMP_CODE_TABLES = ['leave_requests', 'dtr_submissions', 'loan_requests', 'overtime_requests',
+  'payslip_ack', 'profile_photos', 'profile_change_requests', 'wfh_requests', 'time_cards'];
+function remapEmployeeCode(oldCode, newCode) {
+  if (!oldCode || !newCode || oldCode === newCode) return;
+  try { db.prepare('UPDATE users SET employee_code = ? WHERE employee_code = ?').run(newCode, oldCode); } catch (e) { /* guard */ }
+  EMP_CODE_TABLES.forEach(function (t) {
+    try { db.prepare('UPDATE ' + t + ' SET employee_code = ? WHERE employee_code = ?').run(newCode, oldCode); } catch (e) { /* table/column guard */ }
+  });
+  try { db.prepare('UPDATE documents SET subject_employee_code = ? WHERE subject_employee_code = ?').run(newCode, oldCode); } catch (e) { /* guard */ }
+}
+// Self-heal: repair login accounts whose employee_code no longer matches any
+// employee (e.g. after an employee code was renamed without the accounts being
+// re-linked). Matches the account to an employee by email, then rewrites the
+// stale code everywhere. Idempotent — a correctly linked account is skipped.
+function reconcileEmployeeLinks(data) {
+  const valid = {}, byEmail = {};
+  (data.employees || []).forEach(function (e) {
+    if (e.code) valid[e.code] = true;
+    if (e.email) byEmail[String(e.email).trim().toLowerCase()] = e.code;
+  });
+  let fixed = 0;
+  let users = [];
+  try { users = db.prepare('SELECT id, email, employee_code FROM users WHERE employee_code IS NOT NULL').all(); }
+  catch (e) { return 0; }
+  users.forEach(function (u) {
+    if (valid[u.employee_code]) return;                       // still correctly linked
+    const newCode = byEmail[String(u.email || '').trim().toLowerCase()];
+    if (!newCode || newCode === u.employee_code) return;      // no safe match
+    const taken = db.prepare('SELECT id FROM users WHERE employee_code = ? AND id != ?').get(newCode, u.id);
+    if (taken) return;                                        // that employee is already linked elsewhere
+    remapEmployeeCode(u.employee_code, newCode);
+    fixed++;
+    console.log('Re-linked account ' + u.email + ': ' + u.employee_code + ' -> ' + newCode);
+  });
+  return fixed;
+}
+
 function runDailyJobs() {
   try {
     const data = getCompanyData();
@@ -380,6 +420,7 @@ function runDailyJobs() {
     let changed = ensurePeriods(data, today);
     if (reconcileWfhDtr(data)) changed = true;
     if (reconcileLeaveDtr(data)) changed = true;
+    reconcileEmployeeLinks(data); // repairs login links after employee-code renames (edits tables directly)
     (data.periods || []).forEach(function (p) {
       if (p.status === 'finalized') return;
       const end = parseDateLocal(p.endDate);
@@ -743,6 +784,15 @@ app.put('/api/company', A.requireRole('superadmin', 'admin_payroll'), (req, res)
   try {
     const toSave = loc ? mergeScopedCompanyData(before, data, loc) : data;
     const v = saveCompanyData(toSave, version);
+    // If an employee's code was renamed, keep their login account and request
+    // history linked by rewriting the old code everywhere (matched by stable id).
+    try {
+      const oldById = {};
+      (before.employees || []).forEach(function (e) { if (e.id != null) oldById[e.id] = e.code; });
+      (toSave.employees || []).forEach(function (e) {
+        if (e.id != null && oldById[e.id] && e.code && oldById[e.id] !== e.code) remapEmployeeCode(oldById[e.id], e.code);
+      });
+    } catch (e) { console.error('employee-code remap failed', e.message); }
     // Log each meaningful change (who/what/when) for the superadmin history.
     const changes = diffCompanyData(before, toSave).slice(0, 60);
     changes.forEach(function (c) { audit(req, c.action, c.entity, c.detail + (loc ? ' [' + locationNameOf(before, loc) + ']' : '')); });
