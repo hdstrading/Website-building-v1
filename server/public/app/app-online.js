@@ -132,6 +132,7 @@
             (hasLoc ? '<td><select class="u-loc"' + (u.role === 'superadmin' ? ' disabled title="Super Admins see all locations"' : '') + '>' + locOptions(u.locationId || '') + '</select></td>' : '') +
             '<td><span class="acc-badge ' + u.status + '">' + u.status + '</span></td>' +
             '<td class="acc-actions"><button class="acc-btn ghost u-email">Edit email</button>' +
+            '<button class="acc-btn ghost u-link">' + (u.employeeCode ? 'Re-link 201' : 'Link 201') + '</button>' +
             '<button class="acc-btn ghost u-toggle">' + (u.status === 'disabled' ? 'Enable' : 'Disable') + '</button>' +
             '<button class="acc-btn ghost u-pw">Reset password</button>' +
             '<button class="acc-btn ghost u-del" style="color:#b91c1c">Delete</button></td></tr>';
@@ -145,6 +146,16 @@
           api('/api/admin/users/' + uid + '/email', { method: 'POST', body: JSON.stringify({ email: next }) })
             .then(function (r) {
               if (!r.ok) { alert(r.body.error || 'Could not update email.'); return; }
+              renderTab('users');
+            });
+        };
+        tr.querySelector('.u-link').onclick = function () {
+          var code = prompt('Link this account to an employee 201 record.\n\nEnter the employee ID / code exactly as it appears in the 201 (e.g. 20260729001):', '');
+          if (code === null) return;
+          api('/api/admin/users/' + uid + '/link', { method: 'POST', body: JSON.stringify({ employeeCode: code }) })
+            .then(function (r) {
+              if (!r.ok) { alert(r.body.error || 'Could not link the account.'); return; }
+              alert('Account linked. The employee can now see their 201 and payslips.');
               renderTab('users');
             });
         };

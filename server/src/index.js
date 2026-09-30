@@ -394,7 +394,9 @@ function reconcileEmployeeLinks(data) {
   const valid = {}, byEmail = {};
   (data.employees || []).forEach(function (e) {
     if (e.code) valid[e.code] = true;
-    if (e.email) byEmail[String(e.email).trim().toLowerCase()] = e.code;
+    // Match on the canonical email (Gmail dots / +tag variants of one inbox) so
+    // small differences between the login and 201 email still re-link.
+    if (e.email) byEmail[canonEmail(e.email)] = e.code;
   });
   let fixed = 0;
   let users = [];
@@ -402,7 +404,7 @@ function reconcileEmployeeLinks(data) {
   catch (e) { return 0; }
   users.forEach(function (u) {
     if (valid[u.employee_code]) return;                       // still correctly linked
-    const newCode = byEmail[String(u.email || '').trim().toLowerCase()];
+    const newCode = byEmail[canonEmail(u.email || '')];
     if (!newCode || newCode === u.employee_code) return;      // no safe match
     const taken = db.prepare('SELECT id FROM users WHERE employee_code = ? AND id != ?').get(newCode, u.id);
     if (taken) return;                                        // that employee is already linked elsewhere
@@ -866,6 +868,28 @@ app.post('/api/admin/users/:id/email', adminMgmt, requireUnscoped, (req, res) =>
     db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, user.id);
   } catch (e) { return res.status(409).json({ error: 'That email is already used by another account.' }); }
   audit(req, 'update', 'user', 'Login email of ' + user.email + ' → ' + email);
+  res.json({ ok: true });
+});
+
+// Link (or re-link) an active account to an employee's 201 code. Fixes accounts
+// that show "Awaiting 201 link" — e.g. after an employee code was renamed and
+// the login email doesn't match the 201 email, so the auto-relink couldn't.
+app.post('/api/admin/users/:id/link', adminMgmt, requireUnscoped, (req, res) => {
+  const code = String((req.body || {}).employeeCode || '').trim();
+  if (!code) return res.status(400).json({ error: 'Enter the employee ID / code.' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+  const data = getCompanyData();
+  if (!findEmpByCode(data, code)) return res.status(404).json({ error: 'No employee in the 201 records has the code "' + code + '".' });
+  const clash = db.prepare('SELECT email FROM users WHERE employee_code = ? AND id != ?').get(code, user.id);
+  if (clash) return res.status(409).json({ error: 'That employee is already linked to another account (' + clash.email + ').' });
+  const oldCode = user.employee_code || null;
+  if (oldCode && oldCode !== code) {
+    remapEmployeeCode(oldCode, code); // moves the account AND its request history to the new code
+  } else {
+    db.prepare('UPDATE users SET employee_code = ? WHERE id = ?').run(code, user.id);
+  }
+  audit(req, 'update', 'user', 'Linked account ' + user.email + ' to employee ' + code + (oldCode && oldCode !== code ? ' (was ' + oldCode + ')' : ''));
   res.json({ ok: true });
 });
 
