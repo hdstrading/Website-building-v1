@@ -791,7 +791,8 @@
       card('DTR Status — ' + esc(period.name),
         '<p class="muted">Each employee\'s <b>schedule</b> (set in their profile) is used to compute tardiness, undertime and overtime automatically from the punches.</p>' +
         '<table class="tbl"><thead><tr><th>Code</th><th>Employee</th><th>Schedule</th><th>Records</th><th></th></tr></thead><tbody>' +
-        byEmp + '</tbody></table>') +
+        byEmp + '</tbody></table>',
+        '<button class="btn-sm" id="dtrDownload">⬇ Download DTR (CSV)</button>') +
       ((S.db.meta.overtime && S.db.meta.overtime.requireAuthorization !== false) ? card('Overtime Authorization',
         '<p class="muted">Overtime is only paid when authorized. Review the overtime detected in this period\'s punches and authorize it here — no need to wait for employees to file. Covers post-shift and pre-shift (early time-in) overtime.</p>' +
         '<button class="btn" id="otAuthBtn">Review &amp; Authorize Overtime</button>', '') : '') +
@@ -850,6 +851,8 @@
     });
     var otAuthBtn = v.querySelector('#otAuthBtn');
     if (otAuthBtn) otAuthBtn.addEventListener('click', function () { otAuthForm(pid); });
+    var dtrDl = v.querySelector('#dtrDownload');
+    if (dtrDl) dtrDl.addEventListener('click', function () { exportDtrCsv(period); });
     v.querySelectorAll('[data-dtr-edit]').forEach(function (b) {
       b.addEventListener('click', function () { dtrForm(pid, b.dataset.dtrEdit); });
     });
@@ -1564,6 +1567,56 @@
         r.withholdingTax, loans.toFixed(2), lu.toFixed(2), r.totalDeductions, r.netPay].join(','));
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_payroll.csv', lines.join('\n'), 'text/csv');
+  }
+
+  // Per-day compute options for an employee, mirroring the payroll engine (location
+  // overtime/night-diff overrides + OT authorization), so the exported figures match.
+  function dtrDayOpts(emp) {
+    var rawMeta = S.db.meta || {};
+    var locOv = (rawMeta.locationSettings && emp.locationId && rawMeta.locationSettings[emp.locationId]) || {};
+    var otPolicy = (locOv.overtime !== undefined ? locOv.overtime : rawMeta.overtime) || null;
+    var nightDiff = (locOv.nightDiff !== undefined ? locOv.nightDiff : rawMeta.nightDiff);
+    return {
+      outputBased: emp.employmentType === 'output',
+      defaultBreak: emp.schedBreakMins != null ? emp.schedBreakMins : 60,
+      schedIn: emp.schedTimeIn || null, schedOut: emp.schedTimeOut || null,
+      weekSchedule: emp.weekSchedule || null, monthSchedule: emp.monthSchedule || null,
+      nightDiff: !(nightDiff && nightDiff.enabled === false),
+      ot: otPolicy,
+      requireOtAuth: !!(otPolicy && otPolicy.requireAuthorization),
+      otAuth: (S.db.otApprovals && S.db.otApprovals[emp.id]) || {}
+    };
+  }
+
+  // Download the DTR for one cut-off as a CSV: every employee's daily records with
+  // the computed figures (regular / OT / night-diff hours, late & undertime). The
+  // raw columns match the DTR import format, so the file can be re-imported.
+  function exportDtrCsv(period) {
+    var dtr = (S.db.dtr && S.db.dtr[period.id]) || {};
+    var header = ['EmployeeCode', 'EmployeeName', 'Date', 'Weekday', 'TimeIn', 'TimeOut', 'Break',
+      'DayType', 'RestDay', 'Absent', 'LeaveType', 'Worked',
+      'RegularHours', 'OTHours', 'NightDiffHours', 'LateMinutes', 'UndertimeMinutes'];
+    var lines = [header.join(',')];
+    var hFmt = function (min) { return ((min || 0) / 60).toFixed(2); };
+    var emps = scopeEmps(S.list('employees')).filter(function (e) { return (dtr[e.id] || []).length > 0; });
+    emps.sort(function (a, b) { return (a.lastName + ' ' + a.firstName).localeCompare(b.lastName + ' ' + b.firstName); });
+    emps.forEach(function (e) {
+      var opts = dtrDayOpts(e);
+      (dtr[e.id] || []).slice().sort(function (a, b) { return String(a.date || '').localeCompare(String(b.date || '')); }).forEach(function (d) {
+        var r = PH.dtr.computeDay(d, opts);
+        var ot = (r.otMinutes || 0) + (r.preOtMinutes || 0);
+        lines.push([
+          e.code, name(e), d.date || '', d.date ? weekdayName(d.date) : '',
+          d.timeIn || '', d.timeOut || '', (d.breakMins != null ? d.breakMins : ''),
+          d.dayType || 'regular', (d.restDay ? 'TRUE' : ''), (d.absent ? 'TRUE' : ''),
+          d.leaveType || '', (d.worked ? 'TRUE' : ''),
+          hFmt(r.regularMinutes), hFmt(ot), hFmt(r.nightDiffMinutes),
+          (r.lateMinutes || 0), (r.undertimeMinutes || 0)
+        ].map(csvCell).join(','));
+      });
+    });
+    if (lines.length === 1) { toast('No DTR records to download for ' + period.name + '.'); return; }
+    downloadFile('DTR_' + period.name.replace(/[^\w]+/g, '_') + '.csv', lines.join('\n'), 'text/csv');
   }
 
   // Gallery of employee-uploaded physical time cards for a period (admin DTR view).
