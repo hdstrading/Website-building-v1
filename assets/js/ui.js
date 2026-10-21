@@ -774,7 +774,8 @@
         '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name]; }), pid) +
         '</div>', '') +
       card('Upload DTR (CSV)',
-        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, TimeOut, Break, DayType, RestDay, ScheduledIn, ScheduledOut, Absent, LeaveType, RequiredHours</code>. ' +
+        '<p class="muted">Columns: <code>EmployeeCode, Date, TimeIn, LunchOut, LunchIn, TimeOut, Break, DayType, RestDay, ScheduledIn, ScheduledOut, Absent, LeaveType, RequiredHours</code>. ' +
+        '<code>LunchOut</code> / <code>LunchIn</code> are optional split-shift lunch punches — when both are given, the real lunch gap is the break (Break is ignored). ' +
         '<code>LeaveType</code> accepts <code>SL</code>, <code>VL</code> or <code>EL</code> (approved paid leave). ' +
         'Schedule columns are optional — the employee\'s profile schedule is used when they are blank. ' +
         'Times accept <code>08:00</code>, <code>8:00 AM</code> or <code>0800</code>. See <code>samples/sample_dtr.csv</code>.</p>' +
@@ -961,9 +962,11 @@
       return '<tr data-i="' + i + '">' +
         '<td><input name="date" type="date" value="' + esc(d.date || '') + '">' +
         (d.date ? '<div class="sub">' + weekdayName(d.date) + '</div>' : '') + '</td>' +
-        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '"></td>' +
-        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '"></td>' +
-        '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : (emp.schedBreakMins != null ? emp.schedBreakMins : 60)) + '" style="width:56px"></td>' +
+        '<td><input name="timeIn" value="' + esc(d.timeIn || '') + '" style="width:72px"></td>' +
+        '<td><input name="lunchOut" value="' + esc(d.lunchOut || '') + '" placeholder="lunch" style="width:72px"></td>' +
+        '<td><input name="lunchIn" value="' + esc(d.lunchIn || '') + '" placeholder="lunch" style="width:72px"></td>' +
+        '<td><input name="timeOut" value="' + esc(d.timeOut || '') + '" style="width:72px"></td>' +
+        '<td><input name="breakMins" type="number" value="' + (d.breakMins != null ? d.breakMins : (emp.schedBreakMins != null ? emp.schedBreakMins : 60)) + '" style="width:52px"></td>' +
         '<td>' + select('dayType', [['regular','Regular'],['special','Special Non-Wkg'],['regular_holiday','Reg. Holiday']], d.dayType || 'regular') + '</td>' +
         '<td>' + select('rdStatus', [['','—'],['rest','Rest day'],['absent','Absent']], d.absent ? 'absent' : (d.restDay ? 'rest' : '')) + '</td>' +
         '<td>' + select('leaveType', [['','—'],['SL','SL'],['VL','VL'],['EL','EL'],['UAL','UAL']], d.leaveType || '') + '</td>' +
@@ -977,12 +980,14 @@
     if (!days.length) days.push({});
     var header = isOutput
       ? '<tr><th>Date</th><th>Worked</th><th>Day Type</th><th>Rest / Absent</th><th>Leave</th><th></th></tr>'
-      : '<tr><th>Date</th><th>In</th><th>Out</th><th>Break</th><th>Day Type</th><th>Rest / Absent</th><th>Leave</th><th></th></tr>';
+      : '<tr><th>Date</th><th>In</th><th>Lunch Out</th><th>Lunch In</th><th>Out</th><th>Break</th><th>Day Type</th><th>Rest / Absent</th><th>Leave</th><th></th></tr>';
     var intro = isOutput
       ? 'This is a <b>field / output-based</b> employee (paid ' + money(emp.basicSalary) + ' per day worked). ' +
         'Tick <b>Worked</b> for each day of field work — no time in/out needed. ' +
         'Set <b>Rest / Absent</b> (a day can be one or the other, not both), or pick a <b>Leave</b> type as usual. Working a rest day or holiday still earns the premium.'
-      : 'Just enter <b>In/Out</b> times, set <b>Rest / Absent</b> (a day can be one or the other, not both), or pick a <b>Leave</b> type (SL / VL / EL). Rest days are pre-set from the employee\'s rest day.';
+      : 'Enter the morning <b>In</b>, <b>Lunch Out</b> (before lunch), <b>Lunch In</b> (after lunch) and afternoon <b>Out</b>. ' +
+        'When both lunch punches are filled the actual lunch gap is the break (the Break minutes are ignored); leave the lunch columns blank to use the fixed <b>Break</b> instead. ' +
+        'Set <b>Rest / Absent</b> (one or the other), or pick a <b>Leave</b> type (SL / VL / EL).';
     var body =
       '<p class="muted">Dates below are auto-filled from the period coverage' +
       (period && period.startDate ? ' (' + esc(period.startDate) + ' to ' + esc(period.endDate) + ')' : '') +
@@ -1008,10 +1013,12 @@
             restDay: restDay, absent: absent, leaveType: leaveType, leavePaid: !!leaveType });
         } else {
           var tin = g('timeIn').value, tout = g('timeOut').value;
+          var lout = g('lunchOut') ? g('lunchOut').value : '', lin = g('lunchIn') ? g('lunchIn').value : '';
           // Skip completely empty rows (no date, no punches, no flags).
-          if (!date && !tin && !tout && !leaveType && !restDay && !absent) return;
+          if (!date && !tin && !tout && !lout && !lin && !leaveType && !restDay && !absent) return;
           out.push({
             date: date, timeIn: tin, timeOut: tout,
+            lunchOut: lout, lunchIn: lin,
             breakMins: parseInt(g('breakMins').value, 10) || 0,
             dayType: g('dayType').value,
             restDay: restDay, absent: absent,
@@ -1103,9 +1110,13 @@
         if (period.startDate && day.date < period.startDate) return;
         if (period.endDate && day.date > period.endDate) return;
         var cur = byDate[day.date];
-        if (cur) { cur.timeIn = day.timeIn; cur.timeOut = day.timeOut; cur.absent = false; cur.leaveType = ''; cur.leavePaid = false; }
-        else {
+        if (cur) {
+          cur.timeIn = day.timeIn; cur.timeOut = day.timeOut;
+          cur.lunchOut = day.lunchOut || ''; cur.lunchIn = day.lunchIn || '';
+          cur.absent = false; cur.leaveType = ''; cur.leavePaid = false;
+        } else {
           byDate[day.date] = { date: day.date, timeIn: day.timeIn, timeOut: day.timeOut,
+            lunchOut: day.lunchOut || '', lunchIn: day.lunchIn || '',
             dayType: 'regular', breakMins: (emp.schedBreakMins != null ? emp.schedBreakMins : 60) };
         }
         dayCount++;
@@ -1675,7 +1686,7 @@
   // raw columns match the DTR import format, so the file can be re-imported.
   function exportDtrCsv(period) {
     var dtr = (S.db.dtr && S.db.dtr[period.id]) || {};
-    var header = ['EmployeeCode', 'EmployeeName', 'Date', 'Weekday', 'TimeIn', 'TimeOut', 'Break',
+    var header = ['EmployeeCode', 'EmployeeName', 'Date', 'Weekday', 'TimeIn', 'LunchOut', 'LunchIn', 'TimeOut', 'Break',
       'DayType', 'RestDay', 'Absent', 'LeaveType', 'Worked',
       'RegularHours', 'OTHours', 'NightDiffHours', 'LateMinutes', 'UndertimeMinutes'];
     var lines = [header.join(',')];
@@ -1689,7 +1700,7 @@
         var ot = (r.otMinutes || 0) + (r.preOtMinutes || 0);
         lines.push([
           e.code, name(e), d.date || '', d.date ? weekdayName(d.date) : '',
-          d.timeIn || '', d.timeOut || '', (d.breakMins != null ? d.breakMins : ''),
+          d.timeIn || '', d.lunchOut || '', d.lunchIn || '', d.timeOut || '', (d.breakMins != null ? d.breakMins : ''),
           d.dayType || 'regular', (d.restDay ? 'TRUE' : ''), (d.absent ? 'TRUE' : ''),
           d.leaveType || '', (d.worked ? 'TRUE' : ''),
           hFmt(r.regularMinutes), hFmt(ot), hFmt(r.nightDiffMinutes),
