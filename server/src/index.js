@@ -2438,6 +2438,25 @@ app.post('/api/admin/payslip-acks/:id/resolve', A.requireRole('superadmin', 'adm
   audit(req, 'resolve', 'payslip', pname + ' dispute resolved — ' + resolution.slice(0, 120));
   res.json({ ok: true, payout: payout ? payout.total : null });
 });
+// Correction pay-outs for a period, for the Reports view (bank file / accounting).
+app.get('/api/admin/corrections', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const periodId = String(req.query.periodId || '');
+  if (!periodId) return res.json({ corrections: [] });
+  const data = getCompanyData();
+  const nameByCode = {}, locByCode = {};
+  (data.employees || []).forEach(function (e) {
+    if (!e.code) return;
+    nameByCode[e.code] = e.lastName + ', ' + e.firstName + (e.middleName ? ' ' + e.middleName.charAt(0) + '.' : '');
+    locByCode[e.code] = e.locationId || null;
+  });
+  let rows = db.prepare('SELECT * FROM correction_payslips WHERE period_id = ? ORDER BY created_at').all(periodId);
+  if (req.user.location_id) rows = rows.filter(function (r) { return locByCode[r.employee_code] === req.user.location_id; });
+  res.json({ corrections: rows.map(function (c) {
+    let items = []; try { items = JSON.parse(c.items_json || '[]'); } catch (e) { items = []; }
+    return { id: c.id, employee_code: c.employee_code, employeeName: nameByCode[c.employee_code] || c.employee_code,
+      title: c.title, note: c.note, items: items, total: c.total, at: c.created_at };
+  }) });
+});
 // List active periods (for the employee DTR/leave pickers).
 app.get('/api/me/periods', A.requireAuth, (req, res) => {
   const data = getCompanyData();

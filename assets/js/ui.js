@@ -1721,6 +1721,23 @@
       ? S.db.payrolls[pid] : PH.payroll.runPeriod(period);
     var ids = scopeIds(Object.keys(results));
 
+    // Special correction pay-outs for this period (online only). Fetched once and
+    // cached per period; they flow into the bank file and accounting report.
+    state.corrCache = state.corrCache || {};
+    var corr = state.corrCache[pid];
+    if (IS_ONLINE && corr === undefined) {
+      fetch('/api/admin/corrections?periodId=' + encodeURIComponent(pid), { headers: { 'Content-Type': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { state.corrCache[pid] = (j && j.corrections) || []; renderView(); })
+        .catch(function () { state.corrCache[pid] = []; renderView(); });
+      corr = [];
+    }
+    corr = corr || [];
+    // Keep only corrections for employees in the current (location) scope.
+    var scopeCodes = {}; ids.forEach(function (id) { var r = results[id]; if (r) scopeCodes[r.employeeCode] = 1; });
+    corr = corr.filter(function (c) { return scopeCodes[c.employee_code]; });
+    var corrTotal = corr.reduce(function (s, c) { return s + c.total; }, 0);
+
     v.innerHTML =
       card('Select Period',
         '<div class="inline">' + select('period', periods.map(function (p) { return [p.id, p.name + ' (' + p.status + ')']; }), pid) +
@@ -1728,15 +1745,21 @@
         (state.locationId ? ' <span class="badge">' + esc(locationName(state.locationId)) + '</span>' : ' <span class="badge">All locations</span>') +
         '</div>') +
       card('A. Accounting Report — Full Payslip Detail',
-        '<p class="muted">Every earning and deduction itemized per employee. For books, journal entries and audit.</p>' +
-        '<div class="dtr-scroll">' + accountingTable(results, ids) + '</div>',
+        '<p class="muted">Every earning and deduction itemized per employee. For books, journal entries and audit.' +
+        (corr.length ? ' Includes <b>' + corr.length + '</b> correction pay-out' + (corr.length > 1 ? 's' : '') + ' for this period.' : '') + '</p>' +
+        '<div class="dtr-scroll">' + accountingTable(results, ids, corr) + '</div>',
         '<button class="btn-sm" id="accPrint">Download PDF / Print</button>' +
         '<button class="btn-sm" id="accCsv">Export CSV</button>') +
       card('B. Finance Report — Salary Crediting',
-        '<p class="muted">Net pay and bank details per employee, for the bank salary-credit file.</p>' +
-        '<div class="dtr-scroll">' + financeTable(results, ids) + '</div>',
+        '<p class="muted">Net pay and bank details per employee, for the bank salary-credit file.' +
+        (corr.length ? ' Correction pay-outs (' + money(corrTotal) + ') are included as extra credits.' : '') + '</p>' +
+        '<div class="dtr-scroll">' + financeTable(results, ids, corr) + '</div>',
         '<button class="btn-sm" id="finPrint">Download PDF / Print</button>' +
         '<button class="btn-sm" id="finCsv">Export CSV</button>') +
+      (corr.length ? card('Correction Pay-outs — ' + esc(period.name),
+        '<p class="muted">Special pay-outs issued when resolving disputed payslips this period. Each is an extra credit in the bank file above.</p>' +
+        '<div class="dtr-scroll">' + correctionsTable(corr) + '</div>',
+        '<button class="btn-sm" id="corrCsv">Export CSV</button>') : '') +
       remittanceCard('sss', 'C. SSS — Contribution Collection List (R-3)',
         'Monthly SSS contributions per employee, for filing/remittance to SSS.') +
       remittanceCard('philhealth', 'D. PhilHealth — Remittance Report (RF-1)',
@@ -1744,7 +1767,8 @@
       remittanceCard('pagibig', 'E. Pag-IBIG — Contribution Remittance (MCRF)',
         'Monthly Pag-IBIG (HDMF) contributions per employee, for remittance to Pag-IBIG.') +
       '<p class="disclaimer">💡 Remittance figures are each employee\'s <b>monthly</b> contribution (based on their ' +
-      'contribution basis), shown independently of pay cut-offs. Verify member numbers and totals before filing.</p>';
+      'contribution basis), shown independently of pay cut-offs. Verify member numbers and totals before filing. ' +
+      'Correction pay-outs are added to the bank file and accounting report, but not to the statutory (SSS/PhilHealth/Pag-IBIG/BIR) figures — review their tax/contribution treatment manually.</p>';
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
@@ -1769,16 +1793,46 @@
       printHTML('Accounting Report — ' + period.name,
         '<h2>Accounting Report — ' + esc(period.name) + '</h2>' +
         '<div class="rpt-sub">' + esc(S.db.meta.company.name) + ' • Coverage ' + esc(period.startDate || '') + ' to ' + esc(period.endDate || '') + '</div>' +
-        accountingTable(results, ids));
+        accountingTable(results, ids, corr));
     });
-    v.querySelector('#accCsv').addEventListener('click', function () { exportAccountingCSV(period, results); });
+    v.querySelector('#accCsv').addEventListener('click', function () { exportAccountingCSV(period, results, corr); });
     v.querySelector('#finPrint').addEventListener('click', function () {
       printHTML('Salary Crediting — ' + period.name,
         '<h2>Salary Crediting (Finance) — ' + esc(period.name) + '</h2>' +
         '<div class="rpt-sub">' + esc(S.db.meta.company.name) + ' • Pay date ' + esc(period.payDate || '—') + '</div>' +
-        financeTable(results, ids));
+        financeTable(results, ids, corr));
     });
-    v.querySelector('#finCsv').addEventListener('click', function () { exportFinanceCSV(period, results); });
+    v.querySelector('#finCsv').addEventListener('click', function () { exportFinanceCSV(period, results, corr); });
+    var corrCsvBtn = v.querySelector('#corrCsv');
+    if (corrCsvBtn) corrCsvBtn.addEventListener('click', function () { exportCorrectionsCSV(period, corr); });
+  }
+
+  // Itemized correction pay-outs table (one row per line item, grouped by payout).
+  function correctionsTable(corr) {
+    if (!corr.length) return '<p class="muted">No correction pay-outs.</p>';
+    var grand = 0;
+    var body = corr.map(function (c) {
+      grand += c.total;
+      var items = (c.items || []).map(function (it, i) {
+        return '<tr>' + (i === 0 ? '<td rowspan="' + Math.max(1, c.items.length) + '">' + esc(c.employee_code) + '</td>' +
+          '<td rowspan="' + Math.max(1, c.items.length) + '">' + esc(c.employeeName || '') + '<div class="muted">' + esc(c.title || '') + '</div></td>' : '') +
+          '<td>' + esc(it.name) + '</td><td class="num">' + money(it.amount) + '</td>' +
+          (i === 0 ? '<td class="num" rowspan="' + Math.max(1, c.items.length) + '"><b>' + money(c.total) + '</b></td>' : '') + '</tr>';
+      }).join('');
+      return items || ('<tr><td>' + esc(c.employee_code) + '</td><td>' + esc(c.employeeName || '') + '</td><td>—</td><td class="num">—</td><td class="num"><b>' + money(c.total) + '</b></td></tr>');
+    }).join('');
+    return '<table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Employee</th><th>Adjustment</th><th class="num">Amount</th><th class="num">Pay-out</th></tr></thead><tbody>' +
+      body + '</tbody><tfoot><tr><td colspan="4"><b>TOTAL CORRECTION PAY-OUTS</b></td><td class="num"><b>' + money(grand) + '</b></td></tr></tfoot></table>';
+  }
+  function exportCorrectionsCSV(period, corr) {
+    var lines = [['Code', 'Employee', 'Correction', 'Adjustment', 'Amount', 'Payout Total', 'Issued'].join(',')];
+    corr.forEach(function (c) {
+      (c.items || []).forEach(function (it) {
+        lines.push([c.employee_code, c.employeeName || '', c.title || '', it.name, Number(it.amount).toFixed(2),
+          c.total.toFixed(2), String(c.at || '').slice(0, 10)].map(csvCell).join(','));
+      });
+    });
+    downloadFile(period.name.replace(/[^\w]+/g, '_') + '_corrections.csv', lines.join('\n'), 'text/csv');
   }
 
   // Collect the union of all earning/deduction line names, for stable columns.
@@ -1790,8 +1844,9 @@
     return seen;
   }
 
-  function accountingTable(results, ids) {
-    if (!ids.length) return '<p class="muted">No employees to report.</p>';
+  function accountingTable(results, ids, corrections) {
+    corrections = corrections || [];
+    if (!ids.length && !corrections.length) return '<p class="muted">No employees to report.</p>';
     var earnKeys = collectKeys(results, ids, 'earnings');
     var dedKeys = collectKeys(results, ids, 'deductions');
     var head = '<tr><th>Code</th><th>Name</th>' +
@@ -1813,6 +1868,16 @@
         dedKeys.map(function (k) { return '<td class="num">' + (dm[k] ? money(dm[k]) : '—') + '</td>'; }).join('') +
         '<td class="num">' + money(r.totalDeductions) + '</td><td class="num"><b>' + money(r.netPay) + '</b></td></tr>';
     }).join('');
+    // Correction pay-outs appear as supplementary rows (total in Gross & Net).
+    body += corrections.map(function (c) {
+      grossT += c.total; netT += c.total;
+      return '<tr style="background:#eff6ff"><td>' + esc(c.employee_code) + '</td><td>' + esc(c.employeeName || '') +
+        ' <span class="muted">— correction</span></td>' +
+        earnKeys.map(function () { return '<td class="num">—</td>'; }).join('') +
+        '<td class="num"><b>' + money(c.total) + '</b></td>' +
+        dedKeys.map(function () { return '<td class="num">—</td>'; }).join('') +
+        '<td class="num">' + money(0) + '</td><td class="num"><b>' + money(c.total) + '</b></td></tr>';
+    }).join('');
     var foot = '<tr><td colspan="2"><b>TOTALS</b></td>' +
       earnKeys.map(function (k) { return '<td class="num"><b>' + money(tot[k]) + '</b></td>'; }).join('') +
       '<td class="num"><b>' + money(grossT) + '</b></td>' +
@@ -1821,9 +1886,11 @@
     return '<table class="tbl rpt-tbl"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>';
   }
 
-  function financeTable(results, ids) {
-    if (!ids.length) return '<p class="muted">No employees to report.</p>';
+  function financeTable(results, ids, corrections) {
+    corrections = corrections || [];
+    if (!ids.length && !corrections.length) return '<p class="muted">No employees to report.</p>';
     var netT = 0;
+    var byCode = {}; S.list('employees').forEach(function (e) { if (e.code) byCode[e.code] = e; });
     var body = ids.map(function (id) {
       var r = results[id];
       var e = S.find('employees', id) || {};
@@ -1832,13 +1899,22 @@
         '</td><td>' + esc(e.bankName || '—') + '</td><td>' + esc(e.bankAccountNumber || '—') +
         '</td><td>' + esc(e.bankAccountName || '—') + '</td><td class="num"><b>' + money(r.netPay) + '</b></td></tr>';
     }).join('');
+    // Special correction pay-outs for this period are extra credits in the bank file.
+    body += corrections.map(function (c) {
+      var e = byCode[c.employee_code] || {};
+      netT += c.total;
+      return '<tr style="background:#eff6ff"><td>' + esc(c.employee_code) + '</td><td>' + esc(c.employeeName || '') +
+        ' <span class="muted">— correction</span></td><td>' + esc(e.bankName || '—') + '</td><td>' + esc(e.bankAccountNumber || '—') +
+        '</td><td>' + esc(e.bankAccountName || '—') + '</td><td class="num"><b>' + money(c.total) + '</b></td></tr>';
+    }).join('');
     return '<table class="tbl rpt-tbl"><thead><tr><th>Code</th><th>Name</th><th>Bank</th>' +
       '<th>Account No.</th><th>Account Name</th><th class="num">Net Pay (Credit)</th></tr></thead><tbody>' +
       body + '</tbody><tfoot><tr><td colspan="5"><b>TOTAL TO CREDIT</b></td><td class="num"><b>' +
       money(netT) + '</b></td></tr></tfoot></table>';
   }
 
-  function exportAccountingCSV(period, results) {
+  function exportAccountingCSV(period, results, corrections) {
+    corrections = corrections || [];
     var ids = Object.keys(results);
     var earnKeys = collectKeys(results, ids, 'earnings');
     var dedKeys = collectKeys(results, ids, 'deductions');
@@ -1856,15 +1932,30 @@
         .concat([r.totalDeductions.toFixed(2), r.netPay.toFixed(2)]);
       lines.push(row.map(csvCell).join(','));
     });
+    corrections.forEach(function (c) {
+      var row = [c.employee_code, (c.employeeName || '') + ' — correction (' + (c.title || 'Correction') + ')']
+        .concat(earnKeys.map(function () { return '0.00'; }))
+        .concat([c.total.toFixed(2)])
+        .concat(dedKeys.map(function () { return '0.00'; }))
+        .concat(['0.00', c.total.toFixed(2)]);
+      lines.push(row.map(csvCell).join(','));
+    });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_accounting.csv', lines.join('\n'), 'text/csv');
   }
 
-  function exportFinanceCSV(period, results) {
+  function exportFinanceCSV(period, results, corrections) {
+    corrections = corrections || [];
+    var byCode = {}; S.list('employees').forEach(function (e) { if (e.code) byCode[e.code] = e; });
     var lines = [['Code', 'Name', 'Bank', 'Account Number', 'Account Name', 'Net Pay'].join(',')];
     Object.keys(results).forEach(function (id) {
       var r = results[id]; var e = S.find('employees', id) || {};
       lines.push([r.employeeCode, r.employeeName, e.bankName || '', e.bankAccountNumber || '',
         e.bankAccountName || '', r.netPay.toFixed(2)].map(csvCell).join(','));
+    });
+    corrections.forEach(function (c) {
+      var e = byCode[c.employee_code] || {};
+      lines.push([c.employee_code, (c.employeeName || '') + ' — correction (' + (c.title || 'Correction') + ')',
+        e.bankName || '', e.bankAccountNumber || '', e.bankAccountName || '', c.total.toFixed(2)].map(csvCell).join(','));
     });
     downloadFile(period.name.replace(/[^\w]+/g, '_') + '_salary_credit.csv', lines.join('\n'), 'text/csv');
   }
