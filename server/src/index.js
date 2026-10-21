@@ -2318,7 +2318,15 @@ app.get('/api/me/payslips', A.requireAuth, (req, res) => {
       } : null });
     });
   }
-  res.json({ payslips: out });
+  // Correction (special pay-out) payslips issued when a dispute was resolved.
+  const corrections = [];
+  const pnameById = {}; (data.periods || []).forEach(function (p) { pnameById[p.id] = p.name; });
+  db.prepare('SELECT * FROM correction_payslips WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id).forEach(function (c) {
+    let items = []; try { items = JSON.parse(c.items_json || '[]'); } catch (e) { items = []; }
+    corrections.push({ id: c.id, title: c.title, note: c.note, items: items, total: c.total,
+      periodId: c.period_id, periodName: pnameById[c.period_id] || c.period_id, at: c.created_at });
+  });
+  res.json({ payslips: out, corrections: corrections });
 });
 // Employee accepts or disputes a finalized payslip. Accept requires a typed
 // name; dispute requires a reason. A dispute notifies the payroll admins.
@@ -2372,17 +2380,24 @@ app.get('/api/admin/payslip-acks', A.requireRole('superadmin', 'admin_payroll', 
   ).all();
   if (status === 'disputed' || status === 'accepted') rows = rows.filter(function (r) { return r.status === status; });
   if (req.user.location_id) rows = rows.filter(function (r) { return loc[r.employee_code] === req.user.location_id; });
+  // Correction pay-outs issued per dispute (if any), keyed by ack id.
+  const corrByAck = {};
+  db.prepare('SELECT ack_id, total FROM correction_payslips WHERE ack_id IS NOT NULL').all().forEach(function (c) {
+    corrByAck[c.ack_id] = (corrByAck[c.ack_id] || 0) + c.total;
+  });
   res.json({ acks: rows.map(function (r) {
     return { id: r.id, employee_code: r.employee_code, full_name: r.full_name, period_id: r.period_id,
       period_name: pname[r.period_id] || r.period_id, status: r.status, signed_name: r.signed_name,
       dispute_reason: r.dispute_reason, net_pay: r.net_pay, updated_at: r.updated_at,
-      resolution: r.resolution || '', resolved_at: r.resolved_at || '' };
+      resolution: r.resolution || '', resolved_at: r.resolved_at || '',
+      payout_total: corrByAck[r.id] != null ? corrByAck[r.id] : null };
   }) });
 });
 // Payroll/super admins resolve a disputed payslip, sending it back to the
 // employee (who is notified and can then accept or dispute again).
 app.post('/api/admin/payslip-acks/:id/resolve', A.requireRole('superadmin', 'admin_payroll'), (req, res) => {
-  const resolution = String((req.body || {}).resolution || '').trim().slice(0, 2000);
+  const body = req.body || {};
+  const resolution = String(body.resolution || '').trim().slice(0, 2000);
   if (!resolution) return res.status(400).json({ error: 'Enter how the dispute was resolved.' });
   const a = db.prepare('SELECT * FROM payslip_ack WHERE id = ?').get(req.params.id);
   if (!a) return res.status(404).json({ error: 'Not found.' });
@@ -2393,14 +2408,35 @@ app.post('/api/admin/payslip-acks/:id/resolve', A.requireRole('superadmin', 'adm
     const emp = findEmpByCode(data, a.employee_code);
     if (!emp || (emp.locationId || null) !== req.user.location_id) return res.status(403).json({ error: 'Not allowed for this location.' });
   }
+  // Optional special pay-out → a correction payslip linked to the disputed period.
+  let payout = null;
+  if (body.payout && Array.isArray(body.payout.items)) {
+    const items = body.payout.items.map(function (it) {
+      return { name: String((it && it.name) || '').trim().slice(0, 120), amount: Number(it && it.amount) };
+    }).filter(function (it) { return it.name && isFinite(it.amount) && it.amount !== 0; });
+    if (!items.length) return res.status(400).json({ error: 'Add at least one correction line (description + amount).' });
+    const total = Math.round(items.reduce(function (s, it) { return s + it.amount; }, 0) * 100) / 100;
+    payout = { items: items, total: total,
+      title: String(body.payout.title || '').trim().slice(0, 120) || 'Payslip Correction',
+      note: String(body.payout.note || '').trim().slice(0, 2000) || resolution };
+  }
   db.prepare("UPDATE payslip_ack SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_role = ?, resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
     .run(resolution, req.user.id, req.user.role, a.id);
   const pname = ((getCompanyData().periods || []).find(function (p) { return p.id === a.period_id; }) || {}).name || a.period_id;
+  if (payout) {
+    db.prepare(
+      'INSERT INTO correction_payslips (ack_id, period_id, employee_code, user_id, title, note, items_json, total, created_by, created_role) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(a.id, a.period_id, a.employee_code, a.user_id, payout.title, payout.note,
+      JSON.stringify(payout.items), payout.total, req.user.id, req.user.role);
+    audit(req, 'create', 'correction payslip', pname + ' special pay-out ' + payout.total.toFixed(2) + ' (' + a.employee_code + ')');
+  }
   notify(a.user_id, 'payslip', 'Payslip dispute resolved',
     'Your dispute on the ' + pname + ' payslip was resolved: ' + resolution.slice(0, 200) +
+    (payout ? ' A correction pay-out of PHP ' + payout.total.toFixed(2) + ' was issued — see "My Payslips".' : '') +
     ' — please open the payslip to accept it or raise another dispute.');
   audit(req, 'resolve', 'payslip', pname + ' dispute resolved — ' + resolution.slice(0, 120));
-  res.json({ ok: true });
+  res.json({ ok: true, payout: payout ? payout.total : null });
 });
 // List active periods (for the employee DTR/leave pickers).
 app.get('/api/me/periods', A.requireAuth, (req, res) => {

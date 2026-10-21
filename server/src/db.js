@@ -169,6 +169,27 @@ try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_by INTEGER"); } catch
 try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_role TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE payslip_ack ADD COLUMN resolved_at TEXT"); } catch (e) { /* column already present */ }
 
+// A special correction pay-out issued when resolving a disputed payslip: an
+// additional (supplementary) payslip linked to the disputed period, with its own
+// adjustment line items and a net amount to pay out.
+db.exec(`
+CREATE TABLE IF NOT EXISTS correction_payslips (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ack_id INTEGER,                  -- the dispute this correction resolves
+  period_id TEXT NOT NULL,         -- the disputed payslip's period
+  employee_code TEXT,
+  user_id INTEGER,
+  title TEXT DEFAULT '',
+  note TEXT DEFAULT '',            -- explanation (defaults to the resolution text)
+  items_json TEXT NOT NULL DEFAULT '[]',  -- [{ name, amount }] adjustment lines
+  total REAL NOT NULL DEFAULT 0,   -- net special pay-out (sum of items)
+  created_by INTEGER, created_role TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_corr_user ON correction_payslips(user_id);
+CREATE INDEX IF NOT EXISTS idx_corr_ack ON correction_payslips(ack_id);
+`);
+
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
