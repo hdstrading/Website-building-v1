@@ -202,12 +202,30 @@
       // No punches but flagged paid leave / holiday-with-pay handled by payroll
       return result;
     }
-    var brk = day.breakMins != null ? day.breakMins
-      : (ws && hasVal(ws.brk)) ? (parseInt(ws.brk, 10) || 0)
-      : (opts.defaultBreak != null ? opts.defaultBreak : 60);
-    var span = outM - inM;
-    if (span <= 0) span += 24 * 60; // crossed midnight
-    var worked = Math.max(0, span - brk);
+    // Optional split-shift lunch punches: morning-in (timeIn), out for lunch
+    // (lunchOut), back from lunch (lunchIn) and afternoon-out (timeOut). When both
+    // lunch punches are present the ACTUAL lunch gap is the break and the day is
+    // worked in two sessions; otherwise fall back to the fixed break minutes.
+    var lunchOut = toMinutes(day.lunchOut);
+    var lunchIn = toMinutes(day.lunchIn);
+    var twoSession = (lunchOut != null && lunchIn != null);
+    // Normalise a punch to sit at/after the morning time-in (for overnight spans).
+    function afterIn(t) { var x = t; if (x < inM) x += 24 * 60; return x; }
+    var outEnd = afterIn(outM);
+    var brk, worked, nightMin;
+    if (twoSession) {
+      var loN = afterIn(lunchOut), liN = afterIn(lunchIn);
+      brk = Math.max(0, liN - loN);                 // actual lunch break
+      worked = Math.max(0, loN - inM) + Math.max(0, outEnd - liN); // AM + PM sessions
+      // Night differential over the two worked sessions (excludes the lunch gap).
+      nightMin = nightMinutes(inM, loN) + nightMinutes(liN, outEnd);
+    } else {
+      brk = day.breakMins != null ? day.breakMins
+        : (ws && hasVal(ws.brk)) ? (parseInt(ws.brk, 10) || 0)
+        : (opts.defaultBreak != null ? opts.defaultBreak : 60);
+      worked = Math.max(0, (outEnd - inM) - brk);
+      nightMin = nightMinutes(inM, outEnd);
+    }
     result.workedMinutes = worked;
 
     // Employee schedule: explicit per-DTR-row value wins, then the weekday
@@ -256,7 +274,7 @@
     }
 
     // Night differential can be switched off company-wide in settings.
-    result.nightDiffMinutes = (opts.nightDiff === false) ? 0 : nightMinutes(inM, outM);
+    result.nightDiffMinutes = (opts.nightDiff === false) ? 0 : nightMin;
     return result;
   }
 
@@ -391,6 +409,9 @@
     var iLeave = idx('paidleave', 'leave');
     var iLeaveType = idx('leavetype', 'leavecode');
     var iReq = idx('requiredhours', 'requiredhrs', 'reqhours');
+    // Optional split-shift lunch punches (out for lunch / back from lunch).
+    var iLunchOut = idx('lunchout', 'breakout', 'outlunch', 'amout');
+    var iLunchIn = idx('lunchin', 'breakin', 'inlunch', 'pmin');
 
     var out = {};
     for (var r = 1; r < rows.length; r++) {
@@ -401,6 +422,8 @@
         date: iDate >= 0 ? row[iDate].trim() : '',
         timeIn: iIn >= 0 ? row[iIn].trim() : '',
         timeOut: iOut >= 0 ? row[iOut].trim() : '',
+        lunchOut: iLunchOut >= 0 ? row[iLunchOut].trim() : '',
+        lunchIn: iLunchIn >= 0 ? row[iLunchIn].trim() : '',
         breakMins: iBreak >= 0 && row[iBreak].trim() !== '' ? parseInt(row[iBreak], 10) : undefined,
         dayType: normaliseType(iType >= 0 ? row[iType].trim() : ''),
         restDay: iRest >= 0 ? truthy(row[iRest]) : false,
@@ -563,8 +586,10 @@
       return out;
     }
 
-    // Raw punch mode: group all punches by person + day, in=earliest, out=latest.
-    var groups = {}; // key -> date -> { min:{m,s}, max:{m,s} }
+    // Raw punch mode: group all punches by person + day. First = morning in,
+    // last = afternoon out; with 4+ punches the 2nd and 2nd-to-last become the
+    // lunch-out / lunch-in so the real lunch break is captured.
+    var groups = {}; // key -> date -> [minutes...]
     for (var r2 = 1; r2 < rows.length; r2++) {
       var row2 = rows[r2]; var key2 = keyFor(row2); if (!key2) continue;
       var date2, timeStr;
@@ -575,21 +600,22 @@
       var mins = toMinutes(timeStr);
       if (mins == null) continue;
       var g = groups[key2] || (groups[key2] = {});
-      var d = g[date2];
-      if (!d) { g[date2] = { min: { m: mins, s: timeStr }, max: { m: mins, s: timeStr } }; }
-      else {
-        if (mins < d.min.m) d.min = { m: mins, s: timeStr };
-        if (mins > d.max.m) d.max = { m: mins, s: timeStr };
-      }
+      (g[date2] = g[date2] || []).push(mins);
     }
     Object.keys(groups).forEach(function (key3) {
       Object.keys(groups[key3]).sort().forEach(function (date3) {
-        var d3 = groups[key3][date3];
-        (out[key3] = out[key3] || []).push({
+        var arr = groups[key3][date3].slice().sort(function (a, b) { return a - b; });
+        var uniq = []; arr.forEach(function (m) { if (!uniq.length || uniq[uniq.length - 1] !== m) uniq.push(m); });
+        var rec = {
           date: date3,
-          timeIn: minutesToHHMM(d3.min.m),
-          timeOut: d3.max.m > d3.min.m ? minutesToHHMM(d3.max.m) : ''
-        });
+          timeIn: minutesToHHMM(uniq[0]),
+          timeOut: uniq.length > 1 ? minutesToHHMM(uniq[uniq.length - 1]) : ''
+        };
+        if (uniq.length >= 4) {
+          rec.lunchOut = minutesToHHMM(uniq[1]);
+          rec.lunchIn = minutesToHHMM(uniq[uniq.length - 2]);
+        }
+        (out[key3] = out[key3] || []).push(rec);
       });
     });
     return out;
