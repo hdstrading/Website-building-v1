@@ -190,6 +190,34 @@ CREATE INDEX IF NOT EXISTS idx_corr_user ON correction_payslips(user_id);
 CREATE INDEX IF NOT EXISTS idx_corr_ack ON correction_payslips(ack_id);
 `);
 
+// Biometric time clocks that push attendance to us in real time (ZKTeco-style
+// ADMS / "push" protocol, e.g. NGTeco). A device is identified by its serial
+// number; punches it sends are logged and written into the open cut-off's DTR.
+db.exec(`
+CREATE TABLE IF NOT EXISTS adms_devices (
+  sn TEXT PRIMARY KEY,              -- device serial number
+  name TEXT DEFAULT '',
+  location_id TEXT,                 -- branch this clock belongs to
+  enabled INTEGER NOT NULL DEFAULT 0,  -- punches ingested into DTR only when enabled
+  last_seen TEXT,
+  last_ip TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS device_punches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sn TEXT,
+  pin TEXT,                         -- user id on the device (= employee biometricId)
+  punch_time TEXT,                  -- 'YYYY-MM-DD HH:MM:SS' (device local / Manila)
+  punch_date TEXT,                  -- 'YYYY-MM-DD'
+  status TEXT,
+  employee_code TEXT,               -- resolved employee (nullable = unknown pin)
+  received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(sn, pin, punch_time)
+);
+CREATE INDEX IF NOT EXISTS idx_dp_pin_date ON device_punches(pin, punch_date);
+CREATE INDEX IF NOT EXISTS idx_dp_received ON device_punches(received_at);
+`);
+
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }

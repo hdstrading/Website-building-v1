@@ -799,9 +799,15 @@
         '<button class="btn" id="otAuthBtn">Review &amp; Authorize Overtime</button>', '') : '') +
       (IS_ONLINE ? card('Uploaded Time Cards — ' + esc(period.name),
         '<p class="muted">Photos/scans of physical time cards submitted by employees for this period, for reference when checking the DTR.</p>' +
-        '<div id="tcAdmin">Loading…</div>') : '');
+        '<div id="tcAdmin">Loading…</div>') : '') +
+      (IS_ONLINE ? card('Biometric Devices — Real-time Attendance',
+        '<p class="muted">Connect an NGTeco/ZKTeco time clock so its punches flow straight into the DTR. On the device, set ' +
+        '<b>Menu → Comm → Cloud Server / ADMS</b> to the server address below, then approve the device here and assign its branch. ' +
+        'Match each employee to their clock user ID via <b>Biometric / Device ID</b> on their 201.</p>' +
+        '<div id="admsBox">Loading…</div>' +
+        '<h4 style="margin:14px 0 4px">Recent punches</h4><div id="admsPunches" class="muted">Loading…</div>') : '');
 
-    if (IS_ONLINE) loadAdminTimecards(pid);
+    if (IS_ONLINE) { loadAdminTimecards(pid); loadAdmsDevices(); }
 
     v.querySelector('[name=period]').addEventListener('change', function (e) {
       state.selectedPeriod = e.target.value; renderView();
@@ -1736,6 +1742,74 @@
         }).join('') + '</div>';
       })
       .catch(function () { el.innerHTML = '<p class="muted">Could not load time cards.</p>'; });
+  }
+
+  // Real-time biometric devices (ADMS). Lists connected clocks with last-seen,
+  // lets admins approve/assign/remove them, and shows a recent-punch feed.
+  function admsCanEdit() { return PH.role === 'superadmin' || PH.role === 'admin_payroll'; }
+  function loadAdmsDevices() {
+    var box = document.getElementById('admsBox'); if (!box) return;
+    var locOpts = function (sel) {
+      var opts = [['', 'Unassigned']].concat((S.db.meta.locations || []).map(function (l) { return [l.id, l.name]; }));
+      return opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (o[0] === (sel || '') ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('');
+    };
+    fetch('/api/admin/devices', { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var url = (j && j.serverUrl) || '';
+        var devs = (j && j.devices) || [];
+        var head = '<div style="font-size:13px;margin-bottom:8px">On the clock set <b>Server Address</b> to this host (port 443 for https, "Enable Domain Name" on). The device adds the rest automatically.<br>' +
+          'Endpoint: <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px">' + esc(url) + '</code></div>';
+        if (!devs.length) {
+          box.innerHTML = head + '<p class="muted">No devices yet. Once a clock is pointed at the address above and it checks in, it appears here to approve.</p>';
+          return;
+        }
+        box.innerHTML = head + '<table class="tbl"><thead><tr><th>Serial</th><th>Name</th><th>Branch</th>' +
+          '<th>Status</th><th>Last seen (UTC)</th><th>Punches</th>' + (admsCanEdit() ? '<th></th>' : '') + '</tr></thead><tbody>' +
+          devs.map(function (d) {
+            return '<tr data-sn="' + esc(d.sn) + '"><td><code>' + esc(d.sn) + '</code></td>' +
+              '<td>' + (admsCanEdit() ? '<input class="dv-name" value="' + esc(d.name || '') + '" style="width:120px">' : esc(d.name || '—')) + '</td>' +
+              '<td>' + (admsCanEdit() ? '<select class="dv-loc">' + locOpts(d.location_id) + '</select>' : esc(locationName(d.location_id) || '—')) + '</td>' +
+              '<td>' + (d.enabled ? '<span class="badge badge-ok">live</span>' : '<span class="badge">pending</span>') + '</td>' +
+              '<td>' + esc(String(d.last_seen || '').replace('T', ' ').slice(0, 16)) + '</td>' +
+              '<td>' + d.punches + '</td>' +
+              (admsCanEdit() ? '<td class="row-actions"><button class="btn-sm dv-save">' + (d.enabled ? 'Save' : 'Approve') + '</button>' +
+                (d.enabled ? '<button class="btn-sm dv-off">Disable</button>' : '') +
+                '<button class="btn-sm btn-danger dv-del">Remove</button></td>' : '') + '</tr>';
+          }).join('') + '</tbody></table>';
+        if (admsCanEdit()) box.querySelectorAll('tr[data-sn]').forEach(function (tr) {
+          var sn = tr.dataset.sn;
+          function save(enabled) {
+            fetch('/api/admin/devices/' + encodeURIComponent(sn), {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: tr.querySelector('.dv-name').value, locationId: tr.querySelector('.dv-loc').value, enabled: enabled })
+            }).then(function (r) { return r.json(); }).then(function () { loadAdmsDevices(); });
+          }
+          tr.querySelector('.dv-save').addEventListener('click', function () { save(true); });
+          var off = tr.querySelector('.dv-off'); if (off) off.addEventListener('click', function () { save(false); });
+          tr.querySelector('.dv-del').addEventListener('click', function () {
+            if (!confirm('Remove device ' + sn + '? (its logged punches are kept)')) return;
+            fetch('/api/admin/devices/' + encodeURIComponent(sn), { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
+              .then(function (r) { return r.json(); }).then(function () { loadAdmsDevices(); });
+          });
+        });
+      })
+      .catch(function () { box.innerHTML = '<p class="muted">Could not load devices.</p>'; });
+    // Recent punch feed.
+    var pel = document.getElementById('admsPunches');
+    if (pel) fetch('/api/admin/device-punches', { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = (j && j.punches) || [];
+        if (!rows.length) { pel.innerHTML = '<p class="muted">No punches received yet.</p>'; return; }
+        pel.innerHTML = '<table class="tbl"><thead><tr><th>Time</th><th>Device ID</th><th>Employee</th></tr></thead><tbody>' +
+          rows.slice(0, 50).map(function (p) {
+            return '<tr><td>' + esc(p.punch_time || '') + '</td><td><code>' + esc(p.pin || '') + '</code></td><td>' +
+              (p.employee_code ? esc(p.full_name || p.employee_code) : '<span class="badge" style="background:#fee2e2;color:#b91c1c">unmatched pin ' + esc(p.pin) + '</span>') +
+              '</td></tr>';
+          }).join('') + '</tbody></table>';
+      })
+      .catch(function () { pel.innerHTML = '<p class="muted">Could not load punches.</p>'; });
   }
 
   /* ===================== LEAVE CALENDAR ===================== */
