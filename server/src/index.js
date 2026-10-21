@@ -2465,6 +2465,144 @@ app.get('/api/me/periods', A.requireAuth, (req, res) => {
   }) });
 });
 
+/* ================= BIOMETRIC DEVICE (ADMS real-time push) ================= */
+/* ZKTeco-family "push" / ADMS protocol (NGTeco etc.): the time clock opens an
+ * outbound HTTP connection to us and posts attendance as it happens — no PC,
+ * static IP or port-forwarding needed. We log every punch and write it straight
+ * into the open cut-off's DTR, matched to an employee by their Biometric/Device
+ * ID (= the user "pin" on the clock). Device bodies are plain text, not JSON. */
+const admsText = express.text({ type: function () { return true; }, limit: '4mb' });
+function admsGetDevice(sn) { return sn ? db.prepare('SELECT * FROM adms_devices WHERE sn = ?').get(String(sn)) : null; }
+function admsTouch(sn, req) {
+  sn = String(sn || ''); if (!sn) return;
+  const ip = String(req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '').slice(0, 60);
+  const info = db.prepare("UPDATE adms_devices SET last_seen = datetime('now'), last_ip = ? WHERE sn = ?").run(ip, sn);
+  // First time we hear from a serial, auto-register it as DISABLED (pending) so
+  // an admin can assign its branch and switch it on.
+  if (!info.changes) { try { db.prepare("INSERT OR IGNORE INTO adms_devices (sn, enabled, last_seen, last_ip) VALUES (?, 0, datetime('now'), ?)").run(sn, ip); } catch (e) { /* race */ } }
+}
+function admsOptions(sn) {
+  // Minimal option set that enables real-time attendance push.
+  return 'GET OPTION FROM: ' + String(sn || '') + '\n' +
+    'Stamp=9999\nOpStamp=9999\nErrorDelay=30\nDelay=10\n' +
+    'TransTimes=00:00;23:59\nTransInterval=1\nTransFlag=TransData AttLog\n' +
+    'Realtime=1\nTimeZone=8\nEncrypt=0\n';
+}
+function admsResolveEmp(data, pin, locId) {
+  const p = String(pin || '').trim();
+  const list = (data.employees || []).filter(function (e) { return (e.biometricId || '').trim() === p; });
+  if (!list.length) return null;
+  if (locId) { const m = list.find(function (e) { return (e.locationId || null) === locId; }); if (m) return m; }
+  return list[0];
+}
+// Rebuild one DTR day from all of a pin's punches that day (first=in, last=out,
+// 2nd & 2nd-last = lunch out/in when 4+ punches) → the split-shift model.
+function admsPunchTimes(pin, date) {
+  const rows = db.prepare('SELECT punch_time FROM device_punches WHERE pin = ? AND punch_date = ? ORDER BY punch_time').all(String(pin), date);
+  const seen = {}, mins = [];
+  rows.forEach(function (r) { const hm = String(r.punch_time).slice(11, 16); if (/^\d{2}:\d{2}$/.test(hm) && !seen[hm]) { seen[hm] = 1; mins.push(hm); } });
+  mins.sort();
+  const out = { timeIn: mins[0] || '', timeOut: mins.length > 1 ? mins[mins.length - 1] : '', lunchOut: '', lunchIn: '' };
+  if (mins.length >= 4) { out.lunchOut = mins[1]; out.lunchIn = mins[mins.length - 2]; }
+  return out;
+}
+function admsApplyToDtr(data, emp, pin, date) {
+  const period = periodForDateLoc(data, date, emp.locationId);
+  if (!period || period.status === 'finalized') return false; // never touch a finalized cut-off
+  const punch = admsPunchTimes(pin, date);
+  if (!punch.timeIn) return false;
+  data.dtr = data.dtr || {};
+  data.dtr[period.id] = data.dtr[period.id] || {};
+  const arr = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+  let day = arr.find(function (d) { return d.date === date; });
+  if (!day) { day = { date: date, dayType: 'regular', breakMins: (emp.schedBreakMins != null ? emp.schedBreakMins : 60) }; arr.push(day); }
+  day.timeIn = punch.timeIn; day.timeOut = punch.timeOut; day.lunchOut = punch.lunchOut; day.lunchIn = punch.lunchIn;
+  day.absent = false; if (day.leaveType) { day.leaveType = ''; day.leavePaid = false; } // present → clear any stub
+  return true;
+}
+function ingestAttlog(sn, dev, body) {
+  const lines = String(body || '').split(/\r?\n/);
+  const insert = db.prepare('INSERT OR IGNORE INTO device_punches (sn, pin, punch_time, punch_date, status, employee_code) VALUES (?, ?, ?, ?, ?, ?)');
+  const data = getCompanyData();
+  const affected = {};
+  let n = 0;
+  lines.forEach(function (ln) {
+    if (!ln.trim()) return;
+    const parts = ln.indexOf('\t') >= 0 ? ln.split('\t') : ln.trim().split(/\s+/);
+    const pin = (parts[0] || '').trim();
+    const m = /(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(ln);
+    if (!pin || !m) return;
+    const date = m[1];
+    const normTime = date + ' ' + ('0' + m[2]).slice(-2) + ':' + m[3] + ':' + (m[4] || '00');
+    const emp = admsResolveEmp(data, pin, dev && dev.location_id);
+    const info = insert.run(sn, pin, normTime, date, '', emp ? emp.code : null);
+    if (info.changes) n++;
+    if (emp) affected[emp.id + '|' + date] = { emp: emp, pin: pin, date: date };
+  });
+  // Write into the DTR only for an enabled (approved) device.
+  if (dev && dev.enabled) {
+    let changed = false;
+    Object.keys(affected).forEach(function (k) { const a = affected[k]; if (admsApplyToDtr(data, a.emp, a.pin, a.date)) changed = true; });
+    if (changed) saveCompanyData(data);
+  }
+  return n;
+}
+// Handshake: the clock asks for its options on boot and periodically.
+app.get('/iclock/cdata', (req, res) => {
+  const sn = req.query.SN || req.query.sn; admsTouch(sn, req);
+  res.type('text/plain').send(admsOptions(sn));
+});
+// Attendance (and other table) uploads.
+app.post('/iclock/cdata', admsText, (req, res) => {
+  const sn = String(req.query.SN || req.query.sn || ''); admsTouch(sn, req);
+  const table = String(req.query.table || req.query.Table || '');
+  if (/ATTLOG/i.test(table)) {
+    try { const n = ingestAttlog(sn, admsGetDevice(sn), req.body); console.log('[ADMS] ' + sn + ' ATTLOG +' + n); }
+    catch (e) { console.error('[ADMS] ingest failed:', e.message); }
+  }
+  res.type('text/plain').send('OK');
+});
+// Command poll — we have no commands to push back.
+app.get('/iclock/getrequest', (req, res) => { admsTouch(req.query.SN || req.query.sn, req); res.type('text/plain').send('OK'); });
+// Everything else the firmware may call (registry, ping, devicecmd, push/*).
+app.all('/iclock/*', admsText, (req, res) => { admsTouch(req.query.SN || req.query.sn, req); res.type('text/plain').send('OK'); });
+
+/* ---- biometric device administration ---- */
+app.get('/api/admin/devices', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  let rows = db.prepare('SELECT * FROM adms_devices ORDER BY last_seen DESC').all();
+  if (req.user.location_id) rows = rows.filter(function (d) { return !d.location_id || d.location_id === req.user.location_id; });
+  const cnt = {}; db.prepare('SELECT sn, COUNT(*) c FROM device_punches GROUP BY sn').all().forEach(function (r) { cnt[r.sn] = r.c; });
+  res.json({ serverUrl: baseUrl(req) + '/iclock', devices: rows.map(function (d) {
+    return { sn: d.sn, name: d.name, location_id: d.location_id, enabled: !!d.enabled, last_seen: d.last_seen, last_ip: d.last_ip, punches: cnt[d.sn] || 0 };
+  }) });
+});
+app.post('/api/admin/devices/:sn', adminMgmt, (req, res) => {
+  const sn = String(req.params.sn || ''); if (!sn) return res.status(400).json({ error: 'Missing serial number.' });
+  const b = req.body || {};
+  if (!db.prepare('SELECT sn FROM adms_devices WHERE sn = ?').get(sn)) db.prepare('INSERT INTO adms_devices (sn) VALUES (?)').run(sn);
+  db.prepare('UPDATE adms_devices SET name = ?, location_id = ?, enabled = ? WHERE sn = ?')
+    .run(String(b.name || '').slice(0, 80), b.locationId ? String(b.locationId) : null, b.enabled ? 1 : 0, sn);
+  audit(req, 'update', 'device', sn + ' ' + (b.enabled ? 'enabled' : 'disabled') + (b.locationId ? (' @' + b.locationId) : ''));
+  res.json({ ok: true });
+});
+app.delete('/api/admin/devices/:sn', adminMgmt, (req, res) => {
+  db.prepare('DELETE FROM adms_devices WHERE sn = ?').run(String(req.params.sn || ''));
+  audit(req, 'delete', 'device', String(req.params.sn || ''));
+  res.json({ ok: true });
+});
+app.get('/api/admin/device-punches', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const data = getCompanyData();
+  const nameByCode = {}, locByCode = {};
+  (data.employees || []).forEach(function (e) { if (e.code) { nameByCode[e.code] = e.lastName + ', ' + e.firstName; locByCode[e.code] = e.locationId || null; } });
+  let rows = db.prepare('SELECT * FROM device_punches ORDER BY punch_time DESC LIMIT 200').all();
+  if (req.query.unmatched === '1') rows = rows.filter(function (r) { return !r.employee_code; });
+  if (req.user.location_id) rows = rows.filter(function (r) { return r.employee_code ? locByCode[r.employee_code] === req.user.location_id : true; });
+  res.json({ punches: rows.map(function (r) {
+    return { sn: r.sn, pin: r.pin, punch_time: r.punch_time, employee_code: r.employee_code,
+      full_name: r.employee_code ? nameByCode[r.employee_code] : null, received_at: r.received_at };
+  }) });
+});
+
 /* only copy safe 201 fields from a sign-up profile into an employee record */
 function sanitizeProfile(p) {
   const allow = ['firstName', 'middleName', 'lastName', 'birthDate', 'civilStatus', 'address',
