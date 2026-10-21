@@ -1256,20 +1256,71 @@
     function viewPayslips() {
       api('/api/me/payslips').then(function (r) {
         var list = r.body.payslips || [];
+        var corrections = r.body.corrections || [];
         var rows = list.map(function (x, i) {
           return '<tr><td>' + esc(x.period.name) + '</td><td>' + esc(x.period.payDate || '') +
             '</td><td class="num">' + peso(x.result.netPay) + '</td>' +
             '<td><button class="btn sm" data-slip="' + i + '">View</button></td></tr>';
         }).join('');
+        var corrRows = corrections.map(function (c, i) {
+          return '<tr><td>' + esc(c.title || 'Payslip Correction') + '<div class="muted">for ' + esc(c.periodName || '') + '</div></td>' +
+            '<td>' + esc(String(c.at || '').slice(0, 10)) + '</td><td class="num">' + peso(c.total) + '</td>' +
+            '<td><button class="btn sm" data-corr="' + i + '">View</button></td></tr>';
+        }).join('');
         document.getElementById('view').innerHTML =
           '<div class="card"><h2>My Payslips</h2><div class="in scroll">' +
           (rows ? '<table><thead><tr><th>Period</th><th>Pay Date</th><th class="num">Net Pay</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
             : '<p class="muted">No finalized payslips yet.</p>') +
-          '</div></div><div id="slipView"></div>';
+          '</div></div>' +
+          (corrections.length ? '<div class="card"><h2>Correction Pay-outs</h2><div class="in scroll">' +
+            '<p class="muted">Special pay-outs issued to correct a disputed payslip. Each is an additional payslip on top of the original.</p>' +
+            '<table><thead><tr><th>Correction</th><th>Issued</th><th class="num">Pay-out</th><th></th></tr></thead><tbody>' + corrRows + '</tbody></table>' +
+            '</div></div>' : '') +
+          '<div id="slipView"></div>';
         document.querySelectorAll('[data-slip]').forEach(function (b) {
           b.addEventListener('click', function () { showSlip(list[b.dataset.slip]); });
         });
+        document.querySelectorAll('[data-corr]').forEach(function (b) {
+          b.addEventListener('click', function () { showCorrection(corrections[b.dataset.corr]); });
+        });
       });
+    }
+    // A correction (special pay-out) payslip: adjustment line items + net total,
+    // linked to the disputed period. Simpler than the full payslip.
+    function correctionInner(c) {
+      var co = state.profile.company || {}, emp = state.profile.employee || {}, u = state.profile.user || {};
+      var items = (c.items || []).map(function (it) {
+        return '<tr><td>' + esc(it.name) + '</td><td class="num">' + peso(it.amount) + '</td></tr>';
+      }).join('') || '<tr><td class="muted">No line items</td><td></td></tr>';
+      return '<div class="pslip">' +
+        '<div class="ps-head"><div><div class="ps-co">' + esc(co.name || 'Company') + '</div>' +
+        '<div class="ps-co-sub">' + esc(co.address || '') + (co.tin ? ' • TIN ' + esc(co.tin) : '') + '</div></div>' +
+        '<div class="ps-title">CORRECTION</div></div>' +
+        '<div class="ps-meta"><div><b>' + esc(emp.firstName ? (emp.lastName + ', ' + emp.firstName) : (u.fullName || '')) + '</b> (' + esc(emp.code || '') + ')</div>' +
+        '<div>' + esc(c.title || 'Payslip Correction') + '<br>For payslip: ' + esc(c.periodName || '') + '</div>' +
+        '<div>Issued: ' + esc(String(c.at || '').slice(0, 10)) + '</div></div>' +
+        '<div class="ps-cols"><div class="ps-col"><h4>Correction / Adjustment</h4><table><tbody>' + items +
+        '</tbody><tfoot><tr><td><b>Special Pay-out</b></td><td class="num"><b>' + peso(c.total) + '</b></td></tr></tfoot></table></div></div>' +
+        (c.note ? '<div style="margin-top:10px"><h4>Note</h4><p style="font-size:12px">' + esc(c.note) + '</p></div>' : '') +
+        '<div class="ps-net">NET PAY-OUT <span>' + peso(c.total) + '</span></div>' +
+        '<div class="ps-sign"><div>_____________________<br>Employee Signature</div><div>_____________________<br>Authorized Signatory</div></div></div>';
+    }
+    function showCorrection(c) {
+      document.getElementById('slipView').innerHTML =
+        '<div class="card"><div class="in" style="overflow:auto">' +
+        '<style>' + PSLIP_CSS + '</style>' + correctionInner(c) +
+        '<div style="margin-top:12px;text-align:right"><button class="btn" id="corrPrint">Print / Save PDF</button></div>' +
+        '</div></div>';
+      document.getElementById('corrPrint').addEventListener('click', function () {
+        var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Correction ' + esc(c.periodName || '') + '</title>' +
+          '<style>body{margin:16px;background:#fff}' + PSLIP_CSS + '</style></head><body>' + correctionInner(c) + '</body></html>';
+        if (window.AndroidBridge && window.AndroidBridge.printHtml) {
+          window.AndroidBridge.printHtml('Correction ' + (c.periodName || ''), btoa(unescape(encodeURIComponent(html)))); return;
+        }
+        var w = window.open('', '_blank'); if (!w) { window.print(); return; }
+        w.document.write(html); w.document.close(); w.focus(); setTimeout(function () { w.print(); }, 300);
+      });
+      document.getElementById('slipView').scrollIntoView({ behavior: 'smooth' });
     }
     // Full payslip layout — matches the admin/printed payslip so employees see the
     // complete breakdown (earnings, deductions, Daily Time Record, deductible

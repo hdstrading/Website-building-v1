@@ -373,14 +373,16 @@
       // Open disputes first, then resolved, then accepted — so admins act on what needs action.
       var order = { disputed: 0, resolved: 1, accepted: 2 };
       acks = acks.slice().sort(function (a, b) { return (order[a.status] || 3) - (order[b.status] || 3); });
+      var byId = {}; acks.forEach(function (a) { byId[a.id] = a; });
       var disputes = acks.filter(function (a) { return a.status === 'disputed'; }).length;
-      var head = '<p class="acc-muted">Employee sign-off on finalized payslips. Resolving a dispute notifies the employee to accept or dispute again.' +
+      var head = '<p class="acc-muted">Employee sign-off on finalized payslips. Resolving a dispute notifies the employee to accept or dispute again, and can issue a special correction pay-out (an extra payslip linked to the disputed one).' +
         (disputes ? ' <b style="color:#b00020">' + disputes + ' open dispute' + (disputes > 1 ? 's' : '') + ' to resolve.</b>' : '') + '</p>';
       if (!acks.length) { body.innerHTML = head + '<p class="acc-muted">No payslip responses yet.</p>'; return; }
       body.innerHTML = head +
         '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Period</th><th>Response</th><th>Details</th><th>When (UTC)</th><th></th></tr></thead><tbody>' +
         acks.map(function (a) {
           var badge, detail, action = '';
+          var payoutLine = (a.payout_total != null) ? '<br><span class="acc-badge" style="background:#e9f9ee;color:#0a5a26">＋ Correction pay-out ' + peso(a.payout_total) + '</span>' : '';
           if (a.status === 'disputed') {
             badge = '<span class="acc-badge" style="background:#fdecee;color:#8a0016">⚑ Disputed</span>';
             detail = '<span style="color:#8a0016">' + esc(a.dispute_reason || '') + '</span>';
@@ -388,10 +390,10 @@
           } else if (a.status === 'resolved') {
             badge = '<span class="acc-badge" style="background:#eef4ff;color:#1e3a8a">↩ Resolved — awaiting employee</span>';
             detail = '<span class="acc-muted">Disputed:</span> ' + esc(a.dispute_reason || '') +
-              '<br><span class="acc-muted">Resolution:</span> ' + esc(a.resolution || '');
+              '<br><span class="acc-muted">Resolution:</span> ' + esc(a.resolution || '') + payoutLine;
           } else {
             badge = '<span class="acc-badge" style="background:#e9f9ee;color:#0a5a26">✔ Accepted</span>';
-            detail = 'Acknowledged by <b>' + esc(a.signed_name || '') + '</b>';
+            detail = 'Acknowledged by <b>' + esc(a.signed_name || '') + '</b>' + payoutLine;
           }
           return '<tr data-aid="' + a.id + '"><td>' + esc(a.full_name || a.employee_code || '—') + '</td><td>' + esc(a.period_name || '') + '</td>' +
             '<td>' + badge + '</td><td>' + detail + '</td>' +
@@ -399,21 +401,79 @@
             '<td class="acc-actions">' + action + '</td></tr>';
         }).join('') + '</tbody></table>';
       if (canManage) body.querySelectorAll('.pa-resolve').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-          var id = btn.closest('tr').dataset.aid;
-          var resolution = prompt('How was this dispute resolved? (this is sent to the employee)');
-          if (resolution == null) return;
-          resolution = resolution.trim();
-          if (!resolution) { alert('Please describe the resolution.'); return; }
-          btn.disabled = true;
-          api('/api/admin/payslip-acks/' + id + '/resolve', { method: 'POST', body: JSON.stringify({ resolution: resolution }) })
-            .then(function (r) {
-              if (!r.ok || (r.body && r.body.error)) { btn.disabled = false; alert((r.body && r.body.error) || 'Could not resolve.'); return; }
-              renderTab('payslips');
-              refreshDisputeBadge();
-            });
-        });
+        btn.addEventListener('click', function () { openResolveModal(byId[btn.closest('tr').dataset.aid]); });
       });
+    }
+    // Resolve-dispute dialog: resolution note + an optional special pay-out that
+    // generates a correction payslip (adjustment line items) for the employee.
+    function openResolveModal(ack) {
+      if (!ack) return;
+      var ov = document.createElement('div'); ov.className = 'acc-overlay';
+      ov.innerHTML =
+        '<div class="acc-modal" style="width:560px">' +
+        '<div class="acc-head"><b>Resolve dispute — ' + esc(ack.full_name || ack.employee_code || '') + '</b><button class="acc-x" id="rsvX">✕</button></div>' +
+        '<div class="acc-body">' +
+        '<p class="acc-muted">Period: <b>' + esc(ack.period_name || '') + '</b><br>Employee\'s reason: ' + esc(ack.dispute_reason || '') + '</p>' +
+        '<label style="font-weight:600;font-size:13px">Resolution (sent to the employee)</label>' +
+        '<textarea id="rsvText" rows="3" style="width:100%;box-sizing:border-box;margin:4px 0 12px;padding:6px" placeholder="Explain how the dispute was resolved…"></textarea>' +
+        '<label class="acc-chk"><input type="checkbox" id="rsvPayoutOn"> Issue a special pay-out (adds a correction payslip linked to this period)</label>' +
+        '<div id="rsvPayout" style="display:none;margin-top:10px;border:1px solid #e2e8f0;border-radius:8px;padding:10px">' +
+        '<div style="font-weight:600;font-size:13px;margin-bottom:6px">Correction line items <span class="acc-muted">(amounts may be negative)</span></div>' +
+        '<div id="rsvItems"></div>' +
+        '<button class="acc-btn ghost" id="rsvAddItem" type="button">+ Add line</button>' +
+        '<div style="text-align:right;font-weight:700;margin-top:8px">Total pay-out: <span id="rsvTotal">' + peso(0) + '</span></div>' +
+        '</div></div>' +
+        '<div class="acc-head" style="border-top:1px solid #e2e8f0;border-bottom:none;justify-content:flex-end;gap:8px">' +
+        '<button class="acc-btn ghost" id="rsvCancel">Cancel</button>' +
+        '<button class="acc-btn" id="rsvSubmit">Resolve dispute</button></div></div>';
+      document.body.appendChild(ov);
+      function close() { ov.remove(); }
+      ov.querySelector('#rsvX').onclick = close;
+      ov.querySelector('#rsvCancel').onclick = close;
+      ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+      var itemsWrap = ov.querySelector('#rsvItems');
+      function recalc() {
+        var t = 0;
+        itemsWrap.querySelectorAll('.rsv-amt').forEach(function (i) { var n = parseFloat(i.value); if (isFinite(n)) t += n; });
+        ov.querySelector('#rsvTotal').textContent = peso(Math.round(t * 100) / 100);
+      }
+      function addItem() {
+        var row = document.createElement('div');
+        row.className = 'rsv-item'; row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
+        row.innerHTML = '<input class="rsv-name" placeholder="Description (e.g. Unpaid OT 2h)" style="flex:1;padding:5px">' +
+          '<input class="rsv-amt" type="number" step="0.01" placeholder="Amount" style="width:110px;padding:5px">' +
+          '<button class="acc-btn ghost rsv-del" type="button" title="Remove">✕</button>';
+        itemsWrap.appendChild(row);
+        row.querySelector('.rsv-amt').addEventListener('input', recalc);
+        row.querySelector('.rsv-del').addEventListener('click', function () { row.remove(); recalc(); });
+      }
+      ov.querySelector('#rsvAddItem').onclick = addItem;
+      ov.querySelector('#rsvPayoutOn').addEventListener('change', function (e) {
+        ov.querySelector('#rsvPayout').style.display = e.target.checked ? '' : 'none';
+        if (e.target.checked && !itemsWrap.children.length) addItem();
+        recalc();
+      });
+      ov.querySelector('#rsvSubmit').onclick = function () {
+        var resolution = (ov.querySelector('#rsvText').value || '').trim();
+        if (!resolution) { alert('Please describe the resolution.'); return; }
+        var payload = { resolution: resolution };
+        if (ov.querySelector('#rsvPayoutOn').checked) {
+          var items = [];
+          itemsWrap.querySelectorAll('.rsv-item').forEach(function (row) {
+            var name = (row.querySelector('.rsv-name').value || '').trim();
+            var amt = parseFloat(row.querySelector('.rsv-amt').value);
+            if (name && isFinite(amt) && amt !== 0) items.push({ name: name, amount: amt });
+          });
+          if (!items.length) { alert('Add at least one correction line (description + amount), or uncheck the special pay-out.'); return; }
+          payload.payout = { items: items };
+        }
+        var submit = ov.querySelector('#rsvSubmit'); submit.disabled = true;
+        api('/api/admin/payslip-acks/' + ack.id + '/resolve', { method: 'POST', body: JSON.stringify(payload) })
+          .then(function (r) {
+            if (!r.ok || (r.body && r.body.error)) { submit.disabled = false; alert((r.body && r.body.error) || 'Could not resolve.'); return; }
+            close(); renderTab('payslips'); refreshDisputeBadge();
+          });
+      };
     }
     function renderLoans(reqs) {
       if (!reqs.length) { body.innerHTML = '<p class="acc-muted">No loan applications.</p>'; return; }
