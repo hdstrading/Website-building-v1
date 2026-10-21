@@ -1186,27 +1186,94 @@
 
   /* ===================== LOANS ===================== */
   function viewLoans(v) {
-    var loans = S.list('loans');
+    state.loanFilter = state.loanFilter || { employeeId: '', status: '', from: '', to: '', periodId: '' };
+    var f = state.loanFilter;
+    // Scope to the current location's employees (central admins see all).
+    var emps = scopeEmps(S.list('employees'));
+    var empById = {}; emps.forEach(function (e) { empById[e.id] = e; });
+    var allLoans = S.list('loans').filter(function (l) { return empById[l.employeeId]; });
+
+    // Periods that actually have a computed/finalized payroll run (so a loan can
+    // have been deducted on that cutoff). Used by the "deducted on" filter.
+    var runPeriods = periodsChrono(scopePeriods(S.list('periods'))).filter(function (p) { return S.db.payrolls[p.id]; });
+    // Map loanId -> amount deducted, for the selected cutoff.
+    var dedForPeriod = {};
+    if (f.periodId && S.db.payrolls[f.periodId]) {
+      Object.keys(S.db.payrolls[f.periodId]).forEach(function (empId) {
+        (S.db.payrolls[f.periodId][empId].loanDeductions || []).forEach(function (ld) {
+          dedForPeriod[ld.id] = (dedForPeriod[ld.id] || 0) + ld.amount;
+        });
+      });
+    }
+
+    // Apply filters.
+    var loans = allLoans.filter(function (l) {
+      if (f.employeeId && l.employeeId !== f.employeeId) return false;
+      if (f.status === 'active' && !(l.active && l.balance > 0)) return false;
+      if (f.status === 'closed' && (l.active && l.balance > 0)) return false;
+      if (f.from && (!l.startDate || l.startDate < f.from)) return false;
+      if (f.to && (!l.startDate || l.startDate > f.to)) return false;
+      if (f.periodId && dedForPeriod[l.id] == null) return false; // only loans deducted that cutoff
+      return true;
+    });
+
+    var showDed = !!f.periodId;
+    var totalPrincipal = 0, totalBalance = 0, totalDed = 0;
     var rows = loans.length ? loans.map(function (l) {
-      var e = S.find('employees', l.employeeId);
-      return '<tr><td>' + esc(e ? e.code : '?') + '</td><td>' + esc(l.type) +
+      var e = empById[l.employeeId];
+      totalPrincipal += (l.principal || 0); totalBalance += (l.balance || 0);
+      totalDed += (dedForPeriod[l.id] || 0);
+      return '<tr><td>' + esc(e ? e.code : '?') + '<div class="sub">' + esc(e ? (e.lastName + ', ' + e.firstName) : '') + '</div></td><td>' + esc(l.type) +
         (l.reference ? '<div class="sub">' + esc(l.reference) + '</div>' : '') +
-        '</td><td>' + money(l.principal) + '</td><td>' + money(l.monthlyAmortization) +
-        '</td><td>' + money(l.balance) + '</td><td>' +
-        (l.active ? '<span class="badge badge-ok">active</span>' : '<span class="badge">closed</span>') +
+        '</td><td>' + esc(l.startDate || '—') + '</td><td>' + money(l.principal) + '</td><td>' + money(l.monthlyAmortization) +
+        '</td><td>' + money(l.balance) + '</td>' +
+        (showDed ? '<td class="num">' + money(dedForPeriod[l.id] || 0) + '</td>' : '') +
+        '<td>' + (l.active ? '<span class="badge badge-ok">active</span>' : '<span class="badge">closed</span>') +
         '</td><td class="row-actions"><button class="btn-sm" data-loan-edit="' + l.id + '">Edit</button>' +
         '<button class="btn-sm btn-danger" data-loan-del="' + l.id + '">Delete</button></td></tr>';
-    }).join('') : '<tr><td colspan="7" class="muted">No loans or advances recorded.</td></tr>';
+    }).join('') : '<tr><td colspan="' + (showDed ? 9 : 8) + '" class="muted">No loans or deductibles match the filter.</td></tr>';
+
+    var empOpts = [['', 'All employees']].concat(emps.slice().sort(function (a, b) {
+      return (a.lastName + a.firstName).localeCompare(b.lastName + b.firstName);
+    }).map(function (e) { return [e.id, e.code + ' — ' + e.lastName + ', ' + e.firstName]; }));
+    var periodOpts = [['', 'Any cutoff']].concat(runPeriods.map(function (p) {
+      return [p.id, p.name + (p.payDate ? ' (pay ' + p.payDate + ')' : '')];
+    }));
+    var filterBar =
+      '<div class="inline" style="flex-wrap:wrap;gap:8px;align-items:flex-end">' +
+      '<label class="fld" style="max-width:230px"><span class="fld-label">Employee</span>' + select('flEmp', empOpts, f.employeeId) + '</label>' +
+      '<label class="fld" style="max-width:140px"><span class="fld-label">Status</span>' + select('flStatus', [['', 'All'], ['active', 'Active'], ['closed', 'Closed']], f.status) + '</label>' +
+      '<label class="fld" style="max-width:150px"><span class="fld-label">Start from</span><input type="date" id="flFrom" value="' + esc(f.from) + '"></label>' +
+      '<label class="fld" style="max-width:150px"><span class="fld-label">Start to</span><input type="date" id="flTo" value="' + esc(f.to) + '"></label>' +
+      '<label class="fld" style="max-width:250px"><span class="fld-label">Deducted on cutoff</span>' + select('flPeriod', periodOpts, f.periodId) + '</label>' +
+      '<button class="btn-sm" id="flClear">Clear</button>' +
+      '</div>' +
+      '<p class="muted" style="margin:6px 0 0">Showing <b>' + loans.length + '</b> of ' + allLoans.length + ' — total principal ' + money(totalPrincipal) +
+      ', outstanding balance ' + money(totalBalance) + (showDed ? ', <b>deducted this cutoff ' + money(totalDed) + '</b>' : '') + '.</p>';
 
     v.innerHTML = card('Loans, Advances & Deductibles',
       '<p class="muted">Includes SSS/Pag-IBIG loans, company loans, <b>cash advances</b> and <b>product advances</b>. ' +
-      'Amortizations are auto-deducted and balances decrease when a period is finalized.</p>' +
-      '<table class="tbl"><thead><tr><th>Emp</th><th>Type / Reference</th><th>Total</th><th>Amortization/mo</th>' +
-      '<th>Balance</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>',
-      S.list('employees').length ? '<button class="btn" data-loan-add>+ Add Loan</button>' : '');
+      'Amortizations are auto-deducted and balances decrease when a period is finalized. Use the filters to check by person, loan start date, or the payroll cutoff a deduction was taken on.</p>' +
+      filterBar +
+      '<div class="dtr-scroll"><table class="tbl"><thead><tr><th>Emp</th><th>Type / Reference</th><th>Start</th><th>Total</th><th>Amortization/mo</th>' +
+      '<th>Balance</th>' + (showDed ? '<th class="num">Deducted (cutoff)</th>' : '') + '<th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>',
+      (S.list('employees').length ? '<button class="btn" data-loan-add>+ Add Loan</button>' : '') +
+      (loans.length ? '<button class="btn-sm" id="loanExport">Export CSV</button>' : ''));
+
+    function setF(k, val) { f[k] = val; renderView(); }
+    v.querySelector('[name=flEmp]').addEventListener('change', function (e) { setF('employeeId', e.target.value); });
+    v.querySelector('[name=flStatus]').addEventListener('change', function (e) { setF('status', e.target.value); });
+    v.querySelector('#flFrom').addEventListener('change', function (e) { setF('from', e.target.value); });
+    v.querySelector('#flTo').addEventListener('change', function (e) { setF('to', e.target.value); });
+    v.querySelector('[name=flPeriod]').addEventListener('change', function (e) { setF('periodId', e.target.value); });
+    v.querySelector('#flClear').addEventListener('click', function () {
+      state.loanFilter = { employeeId: '', status: '', from: '', to: '', periodId: '' }; renderView();
+    });
 
     var addBtn = v.querySelector('[data-loan-add]');
     if (addBtn) addBtn.addEventListener('click', function () { loanForm(); });
+    var expBtn = v.querySelector('#loanExport');
+    if (expBtn) expBtn.addEventListener('click', function () { exportLoansCSV(loans, empById, f, dedForPeriod, showDed); });
     v.querySelectorAll('[data-loan-edit]').forEach(function (b) {
       b.addEventListener('click', function () { loanForm(S.find('loans', b.dataset.loanEdit)); });
     });
@@ -1215,6 +1282,21 @@
         if (confirm('Delete this loan?')) { S.remove('loans', b.dataset.loanDel); renderView(); }
       });
     });
+  }
+
+  function exportLoansCSV(loans, empById, f, dedForPeriod, showDed) {
+    var header = ['Code', 'Employee', 'Type', 'Reference', 'Start Date', 'Principal', 'Monthly Amortization', 'Balance', 'Status'];
+    if (showDed) header.push('Deducted (cutoff)');
+    var lines = [header.map(csvCell).join(',')];
+    loans.forEach(function (l) {
+      var e = empById[l.employeeId] || {};
+      var row = [e.code || '', (e.lastName ? e.lastName + ', ' + e.firstName : ''), l.type || '', l.reference || '',
+        l.startDate || '', (l.principal || 0).toFixed(2), (l.monthlyAmortization || 0).toFixed(2),
+        (l.balance || 0).toFixed(2), (l.active && l.balance > 0) ? 'Active' : 'Closed'];
+      if (showDed) row.push((dedForPeriod[l.id] || 0).toFixed(2));
+      lines.push(row.map(csvCell).join(','));
+    });
+    downloadFile('loans_deductibles.csv', lines.join('\n'), 'text/csv');
   }
 
   function loanForm(l) {
