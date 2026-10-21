@@ -25,14 +25,14 @@
       '<span class="tb-role">' + roleLabel + '</span>' +
       (user.role === 'finance' ? '<span class="tb-ro">view-only</span>' : '') +
       '<span id="tb-status" class="tb-status"></span>' +
-      (canManage ? '<button id="tb-access" class="tb-btn">Users &amp; Access</button>' : '') +
+      (canManage ? '<button id="tb-access" class="tb-btn">Users &amp; Access<span id="tb-disputes" class="tb-badge" style="display:none"></span></button>' : '') +
       '<span class="tb-user">' + (user.fullName || user.email) + '</span>' +
       '<button id="tb-logout" class="tb-btn">Log out</button>';
     document.body.appendChild(bar);
     document.getElementById('tb-logout').addEventListener('click', function () {
       api('/api/auth/logout', { method: 'POST' }).then(function () { location.href = '/'; });
     });
-    if (canManage) document.getElementById('tb-access').addEventListener('click', openAccessPanel);
+    if (canManage) { document.getElementById('tb-access').addEventListener('click', openAccessPanel); refreshDisputeBadge(); }
     PH.storage.onStatus = function (s) {
       var el = document.getElementById('tb-status');
       if (!el) return;
@@ -42,6 +42,17 @@
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
+  // Count of open (unresolved) payslip disputes, shown as a red badge on the
+  // "Users & Access" button so they are noticed without hunting through tabs.
+  function refreshDisputeBadge() {
+    api('/api/admin/payslip-acks?status=disputed').then(function (r) {
+      var n = ((r.body || {}).acks || []).length;
+      var el = document.getElementById('tb-disputes');
+      if (!el) return;
+      if (n > 0) { el.textContent = n; el.style.display = ''; el.title = n + ' open payslip dispute' + (n > 1 ? 's' : ''); }
+      else { el.style.display = 'none'; }
+    }).catch(function () {});
+  }
   var DUP_LABELS = { email: 'same email inbox', employee: 'same employee record', name: 'same name' };
   function dupBadge(reasons) {
     if (!reasons || !reasons.length) return '';
@@ -70,6 +81,12 @@
     ov.querySelectorAll('.acc-tabs a').forEach(function (a) {
       a.onclick = function () { ov.querySelectorAll('.acc-tabs a').forEach(function (x) { x.classList.remove('active'); }); a.classList.add('active'); renderTab(a.dataset.at); };
     });
+    // Flag open disputes on the Payslip Sign-off tab so they stand out.
+    api('/api/admin/payslip-acks?status=disputed').then(function (r) {
+      var n = ((r.body || {}).acks || []).length; if (!n) return;
+      var tab = ov.querySelector('.acc-tabs a[data-at="payslips"]');
+      if (tab) tab.innerHTML = 'Payslip Sign-off <span class="tb-badge">' + n + '</span>';
+    }).catch(function () {});
     var body = ov.querySelector('#acc-body');
     var leaveMonth = new Date(); leaveMonth = new Date(leaveMonth.getFullYear(), leaveMonth.getMonth(), 1);
     var leaveIncludePending = true;
@@ -393,6 +410,7 @@
             .then(function (r) {
               if (!r.ok || (r.body && r.body.error)) { btn.disabled = false; alert((r.body && r.body.error) || 'Could not resolve.'); return; }
               renderTab('payslips');
+              refreshDisputeBadge();
             });
         });
       });
