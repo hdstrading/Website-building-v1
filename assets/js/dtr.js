@@ -98,8 +98,8 @@
    *  - The first block of `minMinutes` (default 60, "the first hour") must be
    *    COMPLETED before any OT is credited. Below that, OT = 0 (e.g. 59 -> 0).
    *  - Beyond the first hour, time is counted in `incrementMinutes` blocks
-   *    (default 15) rounded to the NEAREST block. e.g. +7m -> +0 (1h07m -> 1h);
-   *    +8m -> +15 (1h08m -> 1h15m); +23m -> +30 (1h23m -> 1h30m).
+   *    (default 15) and rounded DOWN to completed blocks. e.g. +14m -> +0
+   *    (1h14m -> 1h); +15m -> +15 (1h15m -> 1h15m); +29m -> +15 (1h29m -> 1h15m).
    *  - Lateness NEVER reduces overtime. A late employee is charged a separate
    *    tardiness deduction (in peso) and still earns full OT, per DOLE.
    */
@@ -111,9 +111,9 @@
     var minM = rules.minMinutes != null ? rules.minMinutes : 60;
     // The first hour must be completed in full to unlock any OT.
     if (otRaw < minM) return 0;
-    // Beyond the first hour, round to the nearest `inc`-minute block.
+    // Beyond the first hour, round DOWN to completed `inc`-minute blocks.
     var beyond = otRaw - minM;
-    var credited = Math.round(beyond / inc) * inc;
+    var credited = Math.floor(beyond / inc) * inc;
     return minM + credited;
   }
 

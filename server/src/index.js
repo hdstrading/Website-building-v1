@@ -489,7 +489,7 @@ function periodHasDtr(data, pid) {
 /* ---------- overtime authorization computation ----------
  * Mirrors assets/js/dtr.js applyOtRules (DOLE-aligned): the first hour must be
  * completed before any OT counts, time beyond it is credited in `incrementMinutes`
- * blocks (default 15) rounded to the nearest block, and lateness NEVER reduces
+ * blocks (default 15) rounded DOWN to completed blocks, and lateness NEVER reduces
  * overtime — tardiness is a separate peso deduction.
  */
 function hmToMin(s) { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || '')); return m ? (+m[1]) * 60 + (+m[2]) : null; }
@@ -501,9 +501,9 @@ function applyOtRulesSrv(otRaw, rules, lateMinutes) {
   const minM = rules.minMinutes != null ? rules.minMinutes : 60;
   // The first hour must be completed in full to unlock any OT.
   if (otRaw < minM) return 0;
-  // Beyond the first hour, round to the nearest `inc`-minute block.
+  // Beyond the first hour, round DOWN to completed `inc`-minute blocks.
   const beyond = otRaw - minM;
-  const credited = Math.round(beyond / inc) * inc;
+  const credited = Math.floor(beyond / inc) * inc;
   return minM + credited;
 }
 // Effective shift for an employee on a specific date. A per-weekday entry in
