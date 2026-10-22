@@ -360,7 +360,7 @@ function emptyCompanyData() {
     meta: {
       version: 1,
       company: { name: 'My Company', address: '', tin: '' },
-      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true, requireAuthorization: true },
+      overtime: { enabled: true, minMinutes: 60, incrementMinutes: 15, requireAuthorization: true },
       leavePolicy: { manualOpen: false, openDay: 21 },
       thirteenthPolicy: { deductTardiness: true }
     },

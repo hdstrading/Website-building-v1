@@ -15,7 +15,7 @@
         version: 1,
         company: { name: 'My Company', address: '', tin: '' },
         // Company overtime policy (editable in Settings).
-        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5, lateForfeitsFirstHour: true, requireAuthorization: true },
+        overtime: { enabled: true, minMinutes: 60, incrementMinutes: 15, requireAuthorization: true },
         // Leave application window (who can file leave, and when).
         //  openDay     — day of month from which next month's leave may be filed
         //  manualOpen  — superadmin master switch to open filing for any future month
@@ -51,7 +51,9 @@
     // Migrate older saved data that predates newer settings.
     if (!db.meta) db.meta = emptyDB().meta;
     if (!db.meta.overtime) db.meta.overtime = emptyDB().meta.overtime;
-    if (db.meta.overtime.lateForfeitsFirstHour === undefined) db.meta.overtime.lateForfeitsFirstHour = true;
+    // DOLE-aligned OT: 15-minute increments, and lateness never forfeits OT.
+    if (!db.meta.overtime.incrementMinutes || db.meta.overtime.incrementMinutes === 30) db.meta.overtime.incrementMinutes = 15;
+    db.meta.overtime.lateForfeitsFirstHour = false;
     if (db.meta.overtime.requireAuthorization === undefined) db.meta.overtime.requireAuthorization = true;
     if (!db.otApprovals) db.otApprovals = {};
     if (!db.meta.leavePolicy) db.meta.leavePolicy = emptyDB().meta.leavePolicy;

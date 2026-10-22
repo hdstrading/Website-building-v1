@@ -487,32 +487,24 @@ function periodHasDtr(data, pid) {
 }
 
 /* ---------- overtime authorization computation ----------
- * Mirrors assets/js/dtr.js applyOtRules so filed OT is credited exactly like
- * DTR-derived OT: time rounds to 30-min blocks with a 5-min leeway (the leeway
- * covers the first hour too, so 55 min -> 60), OT is credited only once the
- * first hour is reached, and — if the employee was late beyond the grace
- * window — the first OT hour is forfeited while the remainder is still
- * credited in the same 30-min blocks.
+ * Mirrors assets/js/dtr.js applyOtRules (DOLE-aligned): the first hour must be
+ * completed before any OT counts, time beyond it is credited in `incrementMinutes`
+ * blocks (default 15) rounded to the nearest block, and lateness NEVER reduces
+ * overtime — tardiness is a separate peso deduction.
  */
 function hmToMin(s) { const m = /^(\d{1,2}):(\d{2})/.exec(String(s || '')); return m ? (+m[1]) * 60 + (+m[2]) : null; }
 function applyOtRulesSrv(otRaw, rules, lateMinutes) {
   rules = rules || {};
   if (rules.enabled === false) return 0;
   if (!(otRaw > 0)) return 0;
-  const inc = rules.incrementMinutes > 0 ? rules.incrementMinutes : 30;
-  const grace = rules.graceMinutes != null ? rules.graceMinutes : 5;
+  const inc = rules.incrementMinutes > 0 ? rules.incrementMinutes : 15;
   const minM = rules.minMinutes != null ? rules.minMinutes : 60;
-  const late = lateMinutes || 0;
-  // Round to `inc`-minute blocks, crediting a block once within `grace` of
-  // completing it (the leeway applies to the first hour too, e.g. 55 -> 60).
-  let blocks = Math.floor(otRaw / inc);
-  if (otRaw - blocks * inc >= inc - grace) blocks += 1;
-  const rounded = blocks * inc;
-  // The first hour must be reached (after rounding) to unlock any OT.
-  if (rounded < minM) return 0;
-  // Being late (> grace) forfeits the first hour; the rest still counts.
-  if (late > grace && rules.lateForfeitsFirstHour !== false) return rounded - minM;
-  return rounded;
+  // The first hour must be completed in full to unlock any OT.
+  if (otRaw < minM) return 0;
+  // Beyond the first hour, round to the nearest `inc`-minute block.
+  const beyond = otRaw - minM;
+  const credited = Math.round(beyond / inc) * inc;
+  return minM + credited;
 }
 // Effective shift for an employee on a specific date. A per-weekday entry in
 // emp.weekSchedule overrides the base shift field-by-field; blanks fall back.
