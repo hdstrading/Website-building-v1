@@ -2720,7 +2720,7 @@
     // override; otherwise they edit the company-wide default.
     var editingLoc = state.locationId || '';
     var LS = editingLoc ? ((S.db.meta.locationSettings || {})[editingLoc] || {}) : {};
-    var OT_DEFAULT = { enabled: true, minMinutes: 60, incrementMinutes: 30, graceMinutes: 5 };
+    var OT_DEFAULT = { enabled: true, minMinutes: 60, incrementMinutes: 15 };
     // Display values: the branch override if it exists, else the company default.
     var ot = editingLoc ? (LS.overtime || S.db.meta.overtime || OT_DEFAULT) : (S.db.meta.overtime || (S.db.meta.overtime = OT_DEFAULT));
     var nd = editingLoc ? (LS.nightDiff || S.db.meta.nightDiff || { enabled: true }) : (S.db.meta.nightDiff || (S.db.meta.nightDiff = { enabled: true }));
@@ -2776,21 +2776,15 @@
         '<input id="previewSalary" type="number" step="100" value="20000"></label>' +
         '<div id="previewOut" class="preview-out"></div>') +
       card('Overtime Policy',
-        '<p class="muted">How overtime (work beyond an employee\'s shift end) is credited.</p>' +
+        '<p class="muted">How overtime (work beyond an employee\'s shift end) is credited. DOLE-aligned: lateness never reduces overtime — it is charged as a separate tardiness deduction.</p>' +
         '<div class="grid2">' +
         field('Overtime enabled', select('otEnabled', [['true','Yes — credit overtime'],['false','No — never credit overtime']], String(ot.enabled !== false))) +
         field('Minimum before OT counts (minutes)',
           '<input id="otMin" type="number" value="' + (ot.minMinutes != null ? ot.minMinutes : 60) + '">' +
-          '<small class="hint">Overtime is only credited once this much is completed — e.g. 60 = the first hour must be finished.</small>') +
+          '<small class="hint">Overtime is only credited once this much is completed — e.g. 60 = the first hour must be finished (59 min → no OT).</small>') +
         field('Round in blocks of (minutes)',
-          '<input id="otInc" type="number" value="' + (ot.incrementMinutes || 30) + '">' +
-          '<small class="hint">After the first hour, OT accrues in these blocks — e.g. 30 minutes.</small>') +
-        field('Grace / rounding threshold (minutes)',
-          '<input id="otGrace" type="number" value="' + (ot.graceMinutes != null ? ot.graceMinutes : 5) + '">' +
-          '<small class="hint">Within this many minutes of a block, round up — including the first hour. e.g. 5 → clock-out at 55 min counts as the full first hour (60); 25 min into the next block counts as 30.</small>') +
-        field('Late employees forfeit first OT hour',
-          select('otLateForfeit', [['true','Yes — a late employee loses the first OT hour'],['false','No — treat OT the same for everyone']], String(ot.lateForfeitsFirstHour !== false)) +
-          '<small class="hint">When someone clocks in late (beyond the grace window), the first hour of overtime is not credited; the remaining OT is still counted in the usual blocks. e.g. late + 2h30m OT → 1h30m.</small>') +
+          '<input id="otInc" type="number" value="' + (ot.incrementMinutes || 15) + '">' +
+          '<small class="hint">After the first hour, OT is counted in these blocks, rounded to the nearest block — e.g. 15. So 1h07m → 1h; 1h08m → 1h15m; 1h23m → 1h30m.</small>') +
         field('Require overtime authorization',
           select('otRequireAuth', [['true','Yes — pay overtime only when authorized'],['false','No — pay all overtime from the DTR']], String(ot.requireAuthorization !== false)) +
           '<small class="hint">When on, both post-shift OT and pre-shift (early time-in) OT are paid only for dates an employee filed and an admin approved. Unauthorized OT (and early time-in) is not paid.</small>') +
@@ -2919,9 +2913,8 @@
       var t = policyTarget('overtime', OT_DEFAULT);
       t.enabled = v.querySelector('[name=otEnabled]').value === 'true';
       t.minMinutes = parseInt(v.querySelector('#otMin').value, 10) || 0;
-      t.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 30;
-      t.graceMinutes = parseInt(v.querySelector('#otGrace').value, 10) || 0;
-      t.lateForfeitsFirstHour = v.querySelector('[name=otLateForfeit]').value === 'true';
+      t.incrementMinutes = parseInt(v.querySelector('#otInc').value, 10) || 15;
+      t.lateForfeitsFirstHour = false; // DOLE: lateness never forfeits OT
       t.requireAuthorization = v.querySelector('[name=otRequireAuth]').value === 'true';
       S.save();
       toast('Overtime policy saved' + locSuffix + '.');
