@@ -2784,7 +2784,7 @@
           '<small class="hint">Overtime is only credited once this much is completed — e.g. 60 = the first hour must be finished (59 min → no OT).</small>') +
         field('Round in blocks of (minutes)',
           '<input id="otInc" type="number" value="' + (ot.incrementMinutes || 15) + '">' +
-          '<small class="hint">After the first hour, OT is counted in these blocks, rounded to the nearest block — e.g. 15. So 1h07m → 1h; 1h08m → 1h15m; 1h23m → 1h30m.</small>') +
+          '<small class="hint">After the first hour, OT is counted in these blocks, rounded down to completed blocks — e.g. 15. So 1h14m → 1h; 1h15m → 1h15m; 1h29m → 1h15m.</small>') +
         field('Require overtime authorization',
           select('otRequireAuth', [['true','Yes — pay overtime only when authorized'],['false','No — pay all overtime from the DTR']], String(ot.requireAuthorization !== false)) +
           '<small class="hint">When on, both post-shift OT and pre-shift (early time-in) OT are paid only for dates an employee filed and an admin approved. Unauthorized OT (and early time-in) is not paid.</small>') +
