@@ -1383,7 +1383,12 @@
   }
 
   function renderRun(area, period) {
-    var results = PH.payroll.runPeriod(period);
+    // For a FINALIZED period use the stored snapshot — the same numbers the
+    // Reports and the employees' payslips show. Re-running live would recompute
+    // loans against the balances finalize already reduced (so paid-off loans
+    // would vanish and the net would be wrong). Only draft/preview runs live.
+    var results = (period.status === 'finalized' && S.db.payrolls[period.id])
+      ? S.db.payrolls[period.id] : PH.payroll.runPeriod(period);
     state.lastRun = { periodId: period.id, results: results };
     var ids = Object.keys(results);
 
