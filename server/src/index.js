@@ -365,9 +365,18 @@ function reconcileLeaveDtr(data) {
       if (!period || period.status === 'finalized') return;
       data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
       const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
-      if (days.some(function (d) { return d.date === date; })) return; // a row already exists — don't disturb
-      days.push({ date: date, leaveType: lr.leave_type, leavePaid: true, dayType: 'regular' });
-      changed = true;
+      const idx = days.findIndex(function (d) { return d.date === date; });
+      if (idx < 0) {
+        days.push({ date: date, leaveType: lr.leave_type, leavePaid: true, dayType: 'regular' });
+        changed = true;
+      } else {
+        // Tag an untouched row (no punches, not absent, not already this leave).
+        // Mirrors the approval endpoint so a blank/rest row still becomes leave.
+        const d = days[idx];
+        if (!d.timeIn && !d.timeOut && !d.absent && !(d.leavePaid && d.leaveType === lr.leave_type)) {
+          d.leaveType = lr.leave_type; d.leavePaid = true; changed = true;
+        }
+      }
     });
   });
   return changed;
