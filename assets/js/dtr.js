@@ -231,6 +231,18 @@
       if (outN < schedIn) outN += 24 * 60;
       result.lateMinutes = Math.max(0, inM - schedIn);
       result.undertimeMinutes = Math.max(0, schedOutN - outN);
+      // Unpaid meal break: never charge the lunch window as late or undertime.
+      // With no explicit lunch punches we assume the break sits in the middle of
+      // the shift, so someone who leaves before lunch isn't docked the (unpaid)
+      // lunch hour — e.g. sched 08:00–17:00 (1h lunch), out 12:00 → 4h undertime,
+      // not 5h.
+      if (brk > 0 && !twoSession) {
+        var ovlp = function (s1, e1, s2, e2) { return Math.max(0, Math.min(e1, e2) - Math.max(s1, s2)); };
+        var lunchStart = schedIn + Math.floor((schedSpan - brk) / 2);
+        var lunchEnd = lunchStart + brk;
+        if (result.lateMinutes > 0) result.lateMinutes = Math.max(0, result.lateMinutes - ovlp(schedIn, inM, lunchStart, lunchEnd));
+        if (result.undertimeMinutes > 0) result.undertimeMinutes = Math.max(0, result.undertimeMinutes - ovlp(outN, schedOutN, lunchStart, lunchEnd));
+      }
       // Full scheduled day is "regular"; late & undertime are deducted separately
       // in peso terms, so paid regular time nets to what was actually rendered.
       result.regularMinutes = required;
