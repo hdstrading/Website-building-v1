@@ -2576,11 +2576,19 @@
     var year = new Date().getFullYear();
     var r = PH.payroll.rates(emp);
     // A. Unpaid days worked — every non-finalized period with this employee's DTR.
+    // Compute per-employee directly: runPeriod() skips non-active employees, and a
+    // separated employee (resigned/terminated/AWOL) is exactly who this is for.
     var unpaidItems = [], unpaidPay = 0, unpaidBasic = 0;
     S.list('periods').filter(function (p) { return p.status !== 'finalized'; }).forEach(function (p) {
       var dtr = (S.db.dtr[p.id] || {})[emp.id];
       if (!dtr || !dtr.length) return;
-      var res = (PH.payroll.runPeriod(p) || {})[emp.id];
+      var res = PH.payroll.computeEmployee(emp, {
+        period: p,
+        dtrDays: dtr,
+        allowances: S.list('allowances').filter(function (a) { return a.employeeId === emp.id; }),
+        adjustments: ((S.db.adjustments || {})[p.id] || {})[emp.id] || [],
+        loans: S.list('loans').filter(function (l) { return l.employeeId === emp.id; })
+      });
       if (!res) return;
       var loanInPeriod = (res.loanDeductions || []).reduce(function (s, l) { return s + l.amount; }, 0);
       var netBeforeLoans = round2(res.netPay + loanInPeriod); // loans settled in full below
