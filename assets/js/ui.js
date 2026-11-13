@@ -122,6 +122,7 @@
     ['leavecal', 'Leave Calendar', '📅'],
     ['reports', 'Reports', '📑'],
     ['thirteenth', '13th Month Pay', '🎁'],
+    ['finalpay', 'Final Pay', '🧾'],
     ['bir', 'BIR Forms', '📄'],
     ['settings', 'Statutory Settings', '⚙️'],
     ['backup', 'Backup & Data', '💾']
@@ -133,7 +134,13 @@
   var IS_ONLINE = !!(PH.storage && PH.storage.KEY === 'online');
   function visibleViews() {
     var vs = (PH.role === 'auditor') ? VIEWS.filter(function (v) { return AUDITOR_VIEWS.indexOf(v[0]) >= 0; }) : VIEWS;
-    return vs.filter(function (v) { return v[0] !== 'leavecal' || IS_ONLINE; });
+    return vs.filter(function (v) {
+      if (v[0] === 'leavecal' || v[0] === 'finalpay') {
+        if (!IS_ONLINE) return false;                 // server-backed views: online only
+        if (v[0] === 'finalpay') return PH.role === 'superadmin' || PH.role === 'admin_payroll';
+      }
+      return true;
+    });
   }
 
   function navigate(view) { state.view = view; render(); }
@@ -181,6 +188,7 @@
       leavecal: viewLeaveCalendar,
       reports: viewReports,
       thirteenth: viewThirteenth,
+      finalpay: viewFinalPay,
       bir: viewBIR,
       settings: viewSettings,
       backup: viewBackup
@@ -2556,6 +2564,185 @@
     var rows = thirteenthRows(year);
     var found = rows.filter(function (r) { return r.emp.id === empId; })[0];
     return found ? found.pay : 0;
+  }
+
+  /* ===================== FINAL PAY (separated employees) ===================== */
+  var SEP_STATUSES = ['terminated', 'resigned', 'awol'];
+  var SEP_LABEL = { terminated: 'Terminated', resigned: 'Resigned', awol: 'AWOL' };
+  // Compute a separated employee's final pay: unpaid days worked + pro-rated 13th
+  // month + unused-leave (SIL) conversion, less remaining deductibles.
+  function computeFinalPay(emp) {
+    var round2 = PH.statutory.round2;
+    var year = new Date().getFullYear();
+    var r = PH.payroll.rates(emp);
+    // A. Unpaid days worked — every non-finalized period with this employee's DTR.
+    var unpaidItems = [], unpaidPay = 0, unpaidBasic = 0;
+    S.list('periods').filter(function (p) { return p.status !== 'finalized'; }).forEach(function (p) {
+      var dtr = (S.db.dtr[p.id] || {})[emp.id];
+      if (!dtr || !dtr.length) return;
+      var res = (PH.payroll.runPeriod(p) || {})[emp.id];
+      if (!res) return;
+      var loanInPeriod = (res.loanDeductions || []).reduce(function (s, l) { return s + l.amount; }, 0);
+      var netBeforeLoans = round2(res.netPay + loanInPeriod); // loans settled in full below
+      unpaidPay += netBeforeLoans;
+      (res.earnings || []).forEach(function (e) { if (/^Basic Pay/.test(e.name)) unpaidBasic += e.amount; });
+      unpaidItems.push({ period: p.name, amount: netBeforeLoans });
+    });
+    unpaidPay = round2(unpaidPay);
+    // B. Pro-rated 13th month: (finalized basic this year + unpaid basic) / 12.
+    var basicYear = round2((basicEarnedFromHistory(emp.id, year) || 0) + unpaidBasic);
+    var released13 = ((S.db.thirteenthMonth[year] || {})[emp.id] || {}).released || 0;
+    var thirteenth = round2(Math.max(0, basicYear / 12 - released13));
+    // C. Unused leave (SIL) conversion.
+    var creditsLeft = Math.max(0, (emp.leaveCreditsPerYear || 0) - (emp.leaveCreditsUsed || 0));
+    var silPay = round2(creditsLeft * r.daily);
+    // D. Remaining deductibles — outstanding loan/advance balances, in full.
+    var loans = S.list('loans').filter(function (l) { return l.employeeId === emp.id && l.active !== false && (l.balance || 0) > 0; });
+    var dedItems = loans.map(function (l) { return { name: l.type + (l.reference ? ' (' + l.reference + ')' : ''), amount: round2(l.balance || 0) }; });
+    var deductibles = round2(dedItems.reduce(function (s, d) { return s + d.amount; }, 0));
+    var net = round2(unpaidPay + thirteenth + silPay - deductibles);
+    return {
+      employeeCode: emp.code, employeeName: name(emp), position: emp.position || '', department: emp.department || '',
+      status: empStatusVal(emp), year: year, dailyRate: round2(r.daily), monthlyBasic: round2(r.monthlyBasic),
+      hireDate: emp.hireDate || '', separationDate: '',
+      unpaid: { items: unpaidItems, total: unpaidPay },
+      thirteenth: { basicYear: basicYear, released: released13, amount: thirteenth },
+      sil: { creditsLeft: creditsLeft, dailyRate: round2(r.daily), amount: silPay },
+      deductibles: { items: dedItems, total: deductibles },
+      net: net
+    };
+  }
+  // Payslip-style breakdown of a final pay (used for admin preview + print).
+  function finalPayBreakdownHTML(b) {
+    function rowsOf(items) { return (items || []).map(function (i) { return '<tr><td>' + esc(i.name || i.period) + '</td><td class="num">' + money(i.amount) + '</td></tr>'; }).join(''); }
+    return '<table class="tbl rpt-tbl"><tbody>' +
+      '<tr><th colspan="2" style="text-align:left">Unpaid salary (days worked)</th></tr>' + rowsOf(b.unpaid.items) +
+      '<tr><td><b>Unpaid salary subtotal</b></td><td class="num"><b>' + money(b.unpaid.total) + '</b></td></tr>' +
+      '<tr><th colspan="2" style="text-align:left">Pro-rated 13th month pay</th></tr>' +
+      '<tr><td>Basic earned ' + b.year + ': ' + money(b.thirteenth.basicYear) + ' ÷ 12' + (b.thirteenth.released ? ' (less ' + money(b.thirteenth.released) + ' released)' : '') + '</td><td class="num">' + money(b.thirteenth.amount) + '</td></tr>' +
+      '<tr><th colspan="2" style="text-align:left">Unused leave conversion (SIL)</th></tr>' +
+      '<tr><td>' + b.sil.creditsLeft + ' day(s) × ' + money(b.sil.dailyRate) + '</td><td class="num">' + money(b.sil.amount) + '</td></tr>' +
+      '<tr><th colspan="2" style="text-align:left">Less: remaining deductibles</th></tr>' +
+      (b.deductibles.items.length ? b.deductibles.items.map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">(' + money(d.amount) + ')</td></tr>'; }).join('') : '<tr><td class="muted">None</td><td></td></tr>') +
+      '<tr><td><b>Total deductibles</b></td><td class="num"><b>(' + money(b.deductibles.total) + ')</b></td></tr>' +
+      '</tbody><tfoot><tr><td><b>NET FINAL PAY</b></td><td class="num"><b>' + money(b.net) + '</b></td></tr></tfoot></table>';
+  }
+  // Amount in words (for the quitclaim).
+  function pesoWords(amount) {
+    amount = Math.round((Number(amount) || 0) * 100) / 100;
+    var pesos = Math.floor(Math.abs(amount)), cents = Math.round((Math.abs(amount) - pesos) * 100);
+    var ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+    var tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+    function chunk(n) { var s = ''; if (n >= 100) { s += ones[Math.floor(n / 100)] + ' hundred'; n %= 100; if (n) s += ' '; } if (n >= 20) { s += tens[Math.floor(n / 10)]; n %= 10; if (n) s += '-' + ones[n]; } else if (n > 0) s += ones[n]; return s; }
+    function words(n) { if (n === 0) return 'zero'; var out = ''; [['billion', 1e9], ['million', 1e6], ['thousand', 1e3]].forEach(function (sc) { if (n >= sc[1]) { out += chunk(Math.floor(n / sc[1])) + ' ' + sc[0] + ' '; n %= sc[1]; } }); if (n > 0) out += chunk(n); return out.trim(); }
+    var w = words(pesos); w = w.charAt(0).toUpperCase() + w.slice(1);
+    return (amount < 0 ? 'Negative ' : '') + w + ' Pesos' + (cents > 0 ? ' and ' + words(cents) + ' Centavos' : '') +
+      ' (PHP ' + (amount < 0 ? '-' : '') + pesos.toLocaleString('en-PH') + '.' + ('0' + cents).slice(-2) + ')';
+  }
+  // Release, Waiver and Quitclaim document.
+  function quitclaimHTML(fp, signedName, acceptedAt) {
+    var b = fp.breakdown || fp; var c = S.db.meta.company || {};
+    var when = acceptedAt ? String(acceptedAt).slice(0, 10) : new Date().toISOString().slice(0, 10);
+    return '<div class="pslip" style="max-width:720px;line-height:1.5">' +
+      '<div style="text-align:center"><div class="ps-co" style="font-size:16px;font-weight:bold">' + esc(c.name || 'Company') + '</div>' +
+      '<div class="ps-co-sub">' + esc(c.address || '') + '</div><h3 style="letter-spacing:2px;margin:12px 0">RELEASE, WAIVER AND QUITCLAIM</h3></div>' +
+      '<p>KNOW ALL MEN BY THESE PRESENTS:</p>' +
+      '<p>That I, <b>' + esc(b.employeeName) + '</b>, of legal age, Filipino, and a former employee of <b>' + esc(c.name || 'the Company') +
+      '</b>' + (b.position ? ' (last holding the position of ' + esc(b.position) + ')' : '') + ', for and in consideration of the sum of <b>' + pesoWords(b.net) +
+      '</b>, receipt of which is hereby acknowledged to my full and complete satisfaction as the <b>full and final settlement of my final pay</b> ' +
+      '(covering unpaid salary, pro-rated 13th month pay and the conversion of my unused leave credits, less my outstanding obligations), ' +
+      'do hereby release and forever discharge the said Company, its officers, directors and employees, from any and all claims, demands, causes of action ' +
+      'of whatever nature arising from my employment and its separation.</p>' +
+      '<p>I further declare that I have no further claim whatsoever against the Company, and that this document may be pleaded as a complete bar to any action I may file.</p>' +
+      '<p>IN WITNESS WHEREOF, I have signed this instrument on ' + esc(when) + '.</p>' +
+      '<div class="ps-sign" style="display:flex;justify-content:space-between;margin-top:36px">' +
+      '<div style="text-align:center">' + (signedName ? '<b>' + esc(signedName) + '</b>' : '______________________') + '<br>Employee (' + esc(b.employeeCode) + ')</div>' +
+      '<div style="text-align:center">______________________<br>Authorized Representative</div></div>' +
+      '</div>';
+  }
+
+  function viewFinalPay(v) {
+    v.innerHTML = card('Final Pay', '<p class="muted">Loading…</p>');
+    fetch('/api/admin/final-pay', { headers: { 'Content-Type': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { renderFinalPay(v, (j && j.finalPays) || []); })
+      .catch(function () { v.innerHTML = card('Final Pay', '<p class="muted">Could not load final pay records.</p>'); });
+  }
+  function renderFinalPay(v, existing) {
+    var byCode = {}; existing.forEach(function (f) { byCode[f.employee_code] = f; });
+    var sep = scopeEmps(S.list('employees')).filter(function (e) { return SEP_STATUSES.indexOf(empStatusVal(e)) >= 0; });
+    var pending = sep.filter(function (e) { return !byCode[e.code] || byCode[e.code].status === 'closed'; });
+
+    var pendRows = pending.length ? pending.map(function (e) {
+      return '<tr><td>' + esc(e.code) + '</td><td>' + esc(name(e)) + '</td><td>' + statusBadge(e) + '</td>' +
+        '<td class="row-actions"><button class="btn-sm" data-fp-prep="' + esc(e.code) + '">Prepare Final Pay</button></td></tr>';
+    }).join('') : '<tr><td colspan="4" class="muted">No separated employees awaiting final pay.</td></tr>';
+
+    var issuedRows = existing.length ? existing.map(function (f) {
+      var st = f.status === 'accepted' ? '<span class="badge badge-ok">accepted</span>' + (f.close_at ? '<div class="sub">closes ' + esc(String(f.close_at).replace('T', ' ').slice(0, 16)) + ' UTC</div>' : '')
+        : f.status === 'closed' ? '<span class="badge">closed</span>'
+          : '<span class="badge badge-draft">issued — awaiting employee</span>';
+      return '<tr><td>' + esc(f.employee_code) + '<div class="sub">' + esc(f.full_name || '') + '</div></td>' +
+        '<td>' + esc(SEP_LABEL[f.reason] || f.reason || '') + '</td><td class="num">' + money(f.net) + '</td><td>' + st + '</td>' +
+        '<td class="row-actions"><button class="btn-sm" data-fp-view="' + f.id + '">View / Quitclaim</button>' +
+        (f.status === 'issued' ? '<button class="btn-sm btn-danger" data-fp-del="' + f.id + '">Delete</button>' : '') + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="muted">No final pay issued yet.</td></tr>';
+
+    v.innerHTML =
+      card('Prepare Final Pay',
+        '<p class="muted">Final pay for <b>Terminated / Resigned / AWOL</b> employees: unpaid days worked + pro-rated 13th month + unused-leave (SIL) conversion, less remaining deductibles. ' +
+        'After you generate it, the employee reviews the payslip and quitclaim and accepts; their account closes automatically 48 hours after acceptance (the record is kept for admins).</p>' +
+        '<table class="tbl"><thead><tr><th>Code</th><th>Name</th><th>Status</th><th></th></tr></thead><tbody>' + pendRows + '</tbody></table>') +
+      card('Issued Final Pay',
+        '<table class="tbl"><thead><tr><th>Employee</th><th>Reason</th><th class="num">Net</th><th>Status</th><th></th></tr></thead><tbody>' + issuedRows + '</tbody></table>');
+
+    v.querySelectorAll('[data-fp-prep]').forEach(function (btn) {
+      btn.addEventListener('click', function () { var e = findEmpByCode2(btn.dataset.fpPrep); if (e) finalPayForm(e, v); });
+    });
+    v.querySelectorAll('[data-fp-view]').forEach(function (btn) {
+      btn.addEventListener('click', function () { var f = existing.filter(function (x) { return x.id == btn.dataset.fpView; })[0]; if (f) finalPayShow(f); });
+    });
+    v.querySelectorAll('[data-fp-del]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        if (!confirm('Delete this issued final pay? (only possible before the employee accepts)')) return;
+        fetch('/api/admin/final-pay/' + btn.dataset.fpDel, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
+          .then(function (r) { return r.json(); }).then(function () { viewFinalPay(v); });
+      });
+    });
+  }
+  function findEmpByCode2(code) { return S.list('employees').filter(function (e) { return e.code === code; })[0]; }
+  function finalPayForm(emp, v) {
+    var b = computeFinalPay(emp);
+    var body =
+      '<p class="muted">Review the computed final pay for <b>' + esc(name(emp)) + '</b> (' + esc(SEP_LABEL[empStatusVal(emp)] || empStatusVal(emp)) + '). ' +
+      'Set the separation date, then generate — the employee will be notified to review and accept it.</p>' +
+      '<div class="inline" style="margin-bottom:8px"><label class="fld" style="max-width:200px"><span class="fld-label">Separation date</span>' +
+      '<input type="date" id="fpSepDate" value="' + esc(emp.separationDate || '') + '"></label></div>' +
+      '<div class="dtr-scroll">' + finalPayBreakdownHTML(b) + '</div>';
+    modal('Final Pay — ' + esc(name(emp)), body, function (form) {
+      b.separationDate = form.querySelector('#fpSepDate').value || '';
+      fetch('/api/admin/final-pay', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeCode: emp.code, breakdown: b, net: b.net, separationDate: b.separationDate })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.error) { alert(j.error); return; }
+        toast('Final pay generated and sent to ' + name(emp) + '.'); viewFinalPay(v);
+      });
+    }, 'wide');
+  }
+  function finalPayShow(f) {
+    var b = f.breakdown || {};
+    var html = '<div style="overflow:auto"><h3 style="margin:0 0 4px">Final Pay — ' + esc(b.employeeName || f.employee_code) + '</h3>' +
+      '<p class="muted">' + esc(SEP_LABEL[f.reason] || f.reason || '') + (f.separation_date ? ' • separated ' + esc(f.separation_date) : '') +
+      (f.status === 'accepted' ? ' • accepted by ' + esc(f.signed_name || '') + (f.accepted_at ? ' on ' + esc(String(f.accepted_at).slice(0, 10)) : '') : '') + '</p>' +
+      finalPayBreakdownHTML(b) +
+      '<div style="margin:14px 0 6px;text-align:right"><button class="btn-sm" id="fpPrintSlip">Print Payslip</button> <button class="btn-sm" id="fpPrintQc">Print Quitclaim</button></div>' +
+      '<h4>Quitclaim</h4>' + quitclaimHTML(f, f.signed_name, f.accepted_at) + '</div>';
+    modal('Final Pay', html, null, 'wide');
+    setTimeout(function () {
+      var ps = document.getElementById('fpPrintSlip'); if (ps) ps.addEventListener('click', function () { printHTML('Final Pay — ' + (b.employeeName || ''), '<h2>Final Pay — ' + esc(b.employeeName || '') + '</h2>' + finalPayBreakdownHTML(b)); });
+      var qc = document.getElementById('fpPrintQc'); if (qc) qc.addEventListener('click', function () { printHTML('Quitclaim — ' + (b.employeeName || ''), quitclaimHTML(f, f.signed_name, f.accepted_at)); });
+    }, 50);
   }
 
   function viewBIR(v) {

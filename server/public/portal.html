@@ -183,7 +183,7 @@
     function go(tab) {
       document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.dataset.tab === tab); });
       ({ profile: viewProfile, dtr: viewDTR, leave: viewLeave, teamcal: viewTeamCal, overtime: viewOvertime, loans: viewLoans,
-         schedule: viewSchedule, bulletin: viewBulletin, payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals })[tab]();
+         schedule: viewSchedule, bulletin: viewBulletin, payslips: viewPayslips, documents: viewDocuments, security: viewSecurity, teamdtr: viewTeamDtr, approvals: viewApprovals, finalpay: viewFinalPay })[tab]();
     }
 
     // ---- bootstrap ----
@@ -211,6 +211,16 @@
         pollNotifs();
         setInterval(pollNotifs, 45000);
         showBulletinPopup();
+        // A separated employee with a final pay gets a dedicated (highlighted) tab.
+        api('/api/me/final-pay').then(function (fr) {
+          if (fr.body && fr.body.finalPay) {
+            var nav = document.querySelector('nav.tabs');
+            if (!nav.querySelector('a[data-tab="finalpay"]')) {
+              nav.insertAdjacentHTML('afterbegin', '<a href="#" data-tab="finalpay" style="color:#b00020;font-weight:700">⚑ Final Pay</a>');
+            }
+            go('finalpay');
+          }
+        });
       });
     });
 
@@ -1520,6 +1530,97 @@
 
     // ---- My Documents ----
     var DOC_UP_CATS = [['med_cert', 'Medical Certificate'], ['el_proof', 'Emergency Leave Proof'], ['other', 'Other Document']];
+    // ---- Final Pay (separated employees) ----
+    function fpWords(amount) {
+      amount = Math.round((Number(amount) || 0) * 100) / 100;
+      var pesos = Math.floor(Math.abs(amount)), cents = Math.round((Math.abs(amount) - pesos) * 100);
+      var ones = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'];
+      var tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+      function chunk(n) { var s = ''; if (n >= 100) { s += ones[Math.floor(n / 100)] + ' hundred'; n %= 100; if (n) s += ' '; } if (n >= 20) { s += tens[Math.floor(n / 10)]; n %= 10; if (n) s += '-' + ones[n]; } else if (n > 0) s += ones[n]; return s; }
+      function words(n) { if (n === 0) return 'zero'; var out = ''; [['billion', 1e9], ['million', 1e6], ['thousand', 1e3]].forEach(function (sc) { if (n >= sc[1]) { out += chunk(Math.floor(n / sc[1])) + ' ' + sc[0] + ' '; n %= sc[1]; } }); if (n > 0) out += chunk(n); return out.trim(); }
+      var w = words(pesos); w = w.charAt(0).toUpperCase() + w.slice(1);
+      return w + ' Pesos' + (cents > 0 ? ' and ' + words(cents) + ' Centavos' : '') + ' (PHP ' + pesos.toLocaleString('en-PH') + '.' + ('0' + cents).slice(-2) + ')';
+    }
+    function fpBreakdownHTML(b) {
+      function rowsOf(items) { return (items || []).map(function (i) { return '<tr><td>' + esc(i.name || i.period) + '</td><td class="num">' + peso(i.amount) + '</td></tr>'; }).join(''); }
+      return '<table style="width:100%;border-collapse:collapse" class="fp-tbl"><tbody>' +
+        '<tr><th colspan="2" style="text-align:left">Unpaid salary (days worked)</th></tr>' + rowsOf(b.unpaid.items) +
+        '<tr><td><b>Unpaid salary subtotal</b></td><td class="num"><b>' + peso(b.unpaid.total) + '</b></td></tr>' +
+        '<tr><th colspan="2" style="text-align:left">Pro-rated 13th month pay</th></tr>' +
+        '<tr><td>Basic earned ' + b.year + ' ÷ 12</td><td class="num">' + peso(b.thirteenth.amount) + '</td></tr>' +
+        '<tr><th colspan="2" style="text-align:left">Unused leave conversion (SIL)</th></tr>' +
+        '<tr><td>' + b.sil.creditsLeft + ' day(s) × ' + peso(b.sil.dailyRate) + '</td><td class="num">' + peso(b.sil.amount) + '</td></tr>' +
+        '<tr><th colspan="2" style="text-align:left">Less: remaining deductibles</th></tr>' +
+        ((b.deductibles.items || []).length ? b.deductibles.items.map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">(' + peso(d.amount) + ')</td></tr>'; }).join('') : '<tr><td class="muted">None</td><td></td></tr>') +
+        '</tbody><tfoot><tr><td><b>NET FINAL PAY</b></td><td class="num"><b>' + peso(b.net) + '</b></td></tr></tfoot></table>';
+    }
+    function fpQuitclaimHTML(b, signedName, when) {
+      var c = (state.profile && state.profile.company) || {};
+      when = when ? String(when).slice(0, 10) : new Date().toISOString().slice(0, 10);
+      return '<div style="border:1px solid #333;padding:16px;line-height:1.5;max-width:720px">' +
+        '<div style="text-align:center"><div style="font-size:16px;font-weight:bold">' + esc(c.name || 'Company') + '</div>' +
+        '<div style="font-size:11px;color:#555">' + esc(c.address || '') + '</div><h3 style="letter-spacing:2px;margin:12px 0">RELEASE, WAIVER AND QUITCLAIM</h3></div>' +
+        '<p>KNOW ALL MEN BY THESE PRESENTS:</p>' +
+        '<p>That I, <b>' + esc(b.employeeName) + '</b>, of legal age, Filipino, and a former employee of <b>' + esc(c.name || 'the Company') + '</b>' +
+        (b.position ? ' (last holding the position of ' + esc(b.position) + ')' : '') + ', for and in consideration of the sum of <b>' + fpWords(b.net) +
+        '</b>, receipt of which is hereby acknowledged to my full and complete satisfaction as the <b>full and final settlement of my final pay</b> ' +
+        '(covering unpaid salary, pro-rated 13th month pay and the conversion of my unused leave credits, less my outstanding obligations), ' +
+        'do hereby release and forever discharge the said Company, its officers, directors and employees, from any and all claims and demands of whatever nature arising from my employment and its separation.</p>' +
+        '<p>IN WITNESS WHEREOF, I have signed this instrument on ' + esc(when) + '.</p>' +
+        '<div style="display:flex;justify-content:space-between;margin-top:36px;font-size:12px">' +
+        '<div style="text-align:center">' + (signedName ? '<b>' + esc(signedName) + '</b>' : '______________________') + '<br>Employee (' + esc(b.employeeCode) + ')</div>' +
+        '<div style="text-align:center">______________________<br>Authorized Representative</div></div></div>';
+    }
+    function viewFinalPay() {
+      api('/api/me/final-pay').then(function (r) {
+        var fp = r.body && r.body.finalPay;
+        var view = document.getElementById('view');
+        if (!fp) { view.innerHTML = '<div class="card"><h2>Final Pay</h2><div class="in"><p class="muted">No final pay on record.</p></div></div>'; return; }
+        var b = fp.breakdown || {};
+        var head = '<div class="card"><h2>Final Pay</h2><div class="in">' +
+          '<p>This is your <b>final pay</b> on separation. Please review the breakdown and the quitclaim below. ' +
+          '<b>Once you accept, your account will automatically close 48 hours later</b> — download or print anything you need before then.</p>' +
+          fpBreakdownHTML(b) + '</div></div>';
+        var qc = '<div class="card"><h2>Quitclaim</h2><div class="in scroll">' + fpQuitclaimHTML(b, fp.signed_name, fp.accepted_at) + '</div></div>';
+        var action;
+        if (fp.status === 'accepted' || fp.status === 'closed') {
+          action = '<div class="card"><div class="in"><p style="color:#0a5a26"><b>✔ Accepted</b>' + (fp.signed_name ? ' by ' + esc(fp.signed_name) : '') +
+            (fp.accepted_at ? ' on ' + esc(String(fp.accepted_at).slice(0, 16).replace('T', ' ')) + ' UTC' : '') + '.</p>' +
+            (fp.close_at ? '<p class="muted">Your account will close around ' + esc(String(fp.close_at).slice(0, 16).replace('T', ' ')) + ' UTC.</p>' : '') +
+            '<button class="btn" id="fpPrint">Print / Save PDF</button></div></div>';
+        } else {
+          action = '<div class="card"><h2>Accept Final Pay &amp; Quitclaim</h2><div class="in">' +
+            '<p>By accepting, you acknowledge receipt of your final pay of <b>' + peso(b.net) + '</b> in full and final settlement, and you sign the quitclaim above.</p>' +
+            '<label style="display:block;font-size:13px;margin-bottom:4px">Type your full name to accept:</label>' +
+            '<input id="fpName" type="text" placeholder="Full name" style="width:100%;max-width:360px;padding:6px;box-sizing:border-box"><br>' +
+            '<button class="btn" id="fpAccept" style="margin-top:10px;background:#0a7d33">✔ Accept Final Pay</button> ' +
+            '<button class="btn" id="fpPrint">Print / Save PDF</button>' +
+            '<span id="fpMsg" class="msg"></span></div></div>';
+        }
+        view.innerHTML = head + qc + action;
+        var printDoc = function () {
+          var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Final Pay — ' + esc(b.employeeName || '') + '</title>' +
+            '<style>body{font-family:Arial,sans-serif;margin:16px}table{width:100%;border-collapse:collapse}.fp-tbl td,.fp-tbl th{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left}.num{text-align:right}tfoot td{border-top:2px solid #111;font-weight:bold}</style></head><body>' +
+            '<h2>Final Pay — ' + esc(b.employeeName || '') + '</h2>' + fpBreakdownHTML(b) + '<div style="margin-top:20px"></div>' + fpQuitclaimHTML(b, fp.signed_name, fp.accepted_at) + '</body></html>';
+          var w = window.open('', '_blank'); if (!w) { window.print(); return; }
+          w.document.write(html); w.document.close(); w.focus(); setTimeout(function () { w.print(); }, 300);
+        };
+        var pb = document.getElementById('fpPrint'); if (pb) pb.addEventListener('click', printDoc);
+        var ab = document.getElementById('fpAccept');
+        if (ab) ab.addEventListener('click', function () {
+          var nm = (document.getElementById('fpName').value || '').trim();
+          var m = document.getElementById('fpMsg');
+          if (!nm) { m.textContent = '  Type your full name to accept.'; m.className = 'msg err'; return; }
+          if (!confirm('Accept your final pay of ' + peso(b.net) + ' as full and final settlement, and sign the quitclaim?\n\nYour account will close 48 hours after you accept.')) return;
+          ab.disabled = true;
+          api('/api/me/final-pay/' + fp.id + '/accept', { method: 'POST', body: JSON.stringify({ signedName: nm }) }).then(function (res) {
+            if (!res.ok || (res.body && res.body.error)) { ab.disabled = false; m.textContent = '  ' + ((res.body && res.body.error) || 'Could not accept.'); m.className = 'msg err'; return; }
+            viewFinalPay();
+          });
+        });
+      });
+    }
+
     function viewDocuments() {
       document.getElementById('view').innerHTML =
         '<div class="card"><h2>Upload a Document</h2><div class="in">' +

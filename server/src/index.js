@@ -432,6 +432,7 @@ function runDailyJobs() {
     if (reconcileWfhDtr(data)) changed = true;
     if (reconcileLeaveDtr(data)) changed = true;
     reconcileEmployeeLinks(data); // repairs login links after employee-code renames (edits tables directly)
+    closeFinalPayAccounts();      // disable logins whose 48h final-pay window elapsed (record kept)
     (data.periods || []).forEach(function (p) {
       if (p.status === 'finalized') return;
       const end = parseDateLocal(p.endDate);
@@ -2604,6 +2605,95 @@ app.get('/api/admin/device-punches', A.requireRole('superadmin', 'admin_payroll'
   }) });
 });
 
+/* ================= FINAL PAY (separated employees) ================= */
+const SEPARATION_REASONS = { terminated: 1, resigned: 1, awol: 1 };
+function empSeparated(emp) { return !!(emp && (SEPARATION_REASONS[emp.status] || emp.active === false)); }
+function finalPayView(r) {
+  let b = {}; try { b = JSON.parse(r.breakdown_json || '{}'); } catch (e) { b = {}; }
+  return { id: r.id, employee_code: r.employee_code, status: r.status, reason: r.reason,
+    separation_date: r.separation_date, net: r.net, breakdown: b, signed_name: r.signed_name,
+    accepted_at: r.accepted_at, close_at: r.close_at, closed_at: r.closed_at, created_at: r.created_at };
+}
+// Admin generates/stores a computed final pay (the admin app computes it with the
+// shared engine, then posts it here to persist, notify and track acceptance).
+app.post('/api/admin/final-pay', adminMgmt, (req, res) => {
+  const b = req.body || {};
+  const code = String(b.employeeCode || '').trim();
+  if (!code) return res.status(400).json({ error: 'Missing employee.' });
+  if (!b.breakdown || typeof b.breakdown !== 'object') return res.status(400).json({ error: 'Missing breakdown.' });
+  if (typeof b.net !== 'number' || !isFinite(b.net)) return res.status(400).json({ error: 'Missing net amount.' });
+  const data = getCompanyData();
+  const emp = findEmpByCode(data, code);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+  if (!empSeparated(emp)) return res.status(400).json({ error: 'Final pay is only for Terminated / Resigned / AWOL employees.' });
+  if (req.user.location_id && (emp.locationId || null) !== req.user.location_id) return res.status(403).json({ error: 'Not allowed for this location.' });
+  const existing = db.prepare("SELECT id, status FROM final_pay WHERE employee_code = ? ORDER BY id DESC").get(code);
+  if (existing && existing.status !== 'issued') return res.status(409).json({ error: 'A final pay for this employee has already been accepted/closed.' });
+  if (existing) db.prepare('DELETE FROM final_pay WHERE id = ?').run(existing.id); // replace an un-accepted draft
+  const u = db.prepare('SELECT id FROM users WHERE employee_code = ?').get(code);
+  const info = db.prepare(
+    'INSERT INTO final_pay (employee_code, user_id, location_id, status, reason, separation_date, breakdown_json, net, created_by, created_role) ' +
+    "VALUES (?, ?, ?, 'issued', ?, ?, ?, ?, ?, ?)"
+  ).run(code, u ? u.id : null, emp.locationId || null, emp.status || 'separated',
+    String(b.separationDate || '').slice(0, 10), JSON.stringify(b.breakdown), b.net, req.user.id, req.user.role);
+  if (u) notify(u.id, 'payslip', 'Final pay ready',
+    'Your final pay has been prepared. Open "Final Pay" to review your last payslip and quitclaim, then accept it. Your account will close 48 hours after you accept.');
+  audit(req, 'create', 'final pay', code + ' net ' + Number(b.net).toFixed(2));
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+app.get('/api/admin/final-pay', A.requireRole('superadmin', 'admin_payroll', 'finance', 'auditor', 'supervisor'), (req, res) => {
+  const data = getCompanyData();
+  const nameByCode = {}, locByCode = {};
+  (data.employees || []).forEach(function (e) { if (e.code) { nameByCode[e.code] = e.lastName + ', ' + e.firstName; locByCode[e.code] = e.locationId || null; } });
+  let rows = db.prepare('SELECT * FROM final_pay ORDER BY created_at DESC').all();
+  if (req.user.location_id) rows = rows.filter(function (r) { return locByCode[r.employee_code] === req.user.location_id; });
+  res.json({ finalPays: rows.map(function (r) { return Object.assign(finalPayView(r), { full_name: nameByCode[r.employee_code] || r.employee_code }); }) });
+});
+app.delete('/api/admin/final-pay/:id', adminMgmt, (req, res) => {
+  const r = db.prepare('SELECT * FROM final_pay WHERE id = ?').get(req.params.id);
+  if (!r) return res.status(404).json({ error: 'Not found.' });
+  if (r.status !== 'issued') return res.status(409).json({ error: 'Cannot delete an accepted/closed final pay.' });
+  db.prepare('DELETE FROM final_pay WHERE id = ?').run(r.id);
+  audit(req, 'delete', 'final pay', r.employee_code);
+  res.json({ ok: true });
+});
+// Employee: view and accept their own final pay.
+app.get('/api/me/final-pay', A.requireAuth, (req, res) => {
+  const r = db.prepare("SELECT * FROM final_pay WHERE employee_code = ? AND status != 'closed' ORDER BY id DESC").get(req.user.employee_code || '');
+  res.json({ finalPay: r ? finalPayView(r) : null });
+});
+app.post('/api/me/final-pay/:id/accept', A.requireAuth, (req, res) => {
+  const name = String((req.body || {}).signedName || '').trim().slice(0, 120);
+  if (!name) return res.status(400).json({ error: 'Type your full name to accept the final pay.' });
+  const r = db.prepare('SELECT * FROM final_pay WHERE id = ?').get(req.params.id);
+  if (!r || r.employee_code !== req.user.employee_code) return res.status(404).json({ error: 'Final pay not found.' });
+  if (r.status !== 'issued') return res.status(409).json({ error: 'This final pay was already accepted.' });
+  // Acceptance signs the quitclaim and starts the 48-hour access window.
+  db.prepare("UPDATE final_pay SET status = 'accepted', signed_name = ?, accepted_at = datetime('now'), close_at = datetime('now', '+48 hours') WHERE id = ?")
+    .run(name, r.id);
+  const admins = db.prepare("SELECT id, location_id FROM users WHERE role IN ('superadmin','admin_payroll') AND status = 'active'").all();
+  const data = getCompanyData(); const emp = findEmpByCode(data, r.employee_code);
+  admins.forEach(function (u) {
+    if (u.location_id && emp && emp.locationId && u.location_id !== emp.locationId) return;
+    notify(u.id, 'payslip', 'Final pay accepted', (r.employee_code) + ' accepted their final pay and quitclaim. Their account closes in 48 hours.');
+  });
+  audit(req, 'accept', 'final pay', r.employee_code + ' accepted (closes in 48h)');
+  res.json({ ok: true });
+});
+// Close accounts whose 48-hour window has elapsed (login disabled; record kept).
+function closeFinalPayAccounts() {
+  let rows = [];
+  try { rows = db.prepare("SELECT * FROM final_pay WHERE status = 'accepted' AND close_at IS NOT NULL AND close_at <= datetime('now')").all(); }
+  catch (e) { return; }
+  rows.forEach(function (r) {
+    try {
+      if (r.user_id) db.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(r.user_id);
+      db.prepare("UPDATE final_pay SET status = 'closed', closed_at = datetime('now') WHERE id = ?").run(r.id);
+      console.log('Final pay: closed account for ' + r.employee_code);
+    } catch (e) { console.error('final-pay close failed', e.message); }
+  });
+}
+
 /* only copy safe 201 fields from a sign-up profile into an employee record */
 function sanitizeProfile(p) {
   const allow = ['firstName', 'middleName', 'lastName', 'birthDate', 'civilStatus', 'address',
@@ -2662,3 +2752,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('PH Payroll server listening on port ' + PORT));
 
 module.exports = app;
+app.closeFinalPayAccounts = closeFinalPayAccounts; // exposed for tests/ops
