@@ -1210,14 +1210,22 @@
     var empById = {}; emps.forEach(function (e) { empById[e.id] = e; });
     var allLoans = S.list('loans').filter(function (l) { return empById[l.employeeId]; });
 
-    // Periods that actually have a computed/finalized payroll run (so a loan can
-    // have been deducted on that cutoff). Used by the "deducted on" filter.
-    var runPeriods = periodsChrono(scopePeriods(S.list('periods'))).filter(function (p) { return S.db.payrolls[p.id]; });
-    // Map loanId -> amount deducted, for the selected cutoff.
+    // Periods selectable in the "deducted on" filter: a finalized cut-off (its
+    // stored snapshot is the record) or any non-finalized cut-off (computed live
+    // below, so it reflects current loans/start-dates, never a stale snapshot).
+    var runPeriods = periodsChrono(scopePeriods(S.list('periods'))).filter(function (p) {
+      return p.status === 'finalized' ? !!S.db.payrolls[p.id] : true;
+    });
+    // Map loanId -> amount deducted, for the selected cutoff. Finalized uses the
+    // snapshot; a draft/preview is run live so future-dated loans are excluded.
     var dedForPeriod = {};
-    if (f.periodId && S.db.payrolls[f.periodId]) {
-      Object.keys(S.db.payrolls[f.periodId]).forEach(function (empId) {
-        (S.db.payrolls[f.periodId][empId].loanDeductions || []).forEach(function (ld) {
+    if (f.periodId) {
+      var selP = S.find('periods', f.periodId);
+      var selRes = (selP && selP.status === 'finalized' && S.db.payrolls[f.periodId])
+        ? S.db.payrolls[f.periodId]
+        : (selP ? PH.payroll.runPeriod(selP) : null);
+      if (selRes) Object.keys(selRes).forEach(function (empId) {
+        (selRes[empId].loanDeductions || []).forEach(function (ld) {
           dedForPeriod[ld.id] = (dedForPeriod[ld.id] || 0) + ld.amount;
         });
       });
