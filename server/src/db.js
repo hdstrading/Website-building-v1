@@ -218,6 +218,31 @@ CREATE INDEX IF NOT EXISTS idx_dp_pin_date ON device_punches(pin, punch_date);
 CREATE INDEX IF NOT EXISTS idx_dp_received ON device_punches(received_at);
 `);
 
+// Final pay (back pay) for separated employees (terminated / resigned / AWOL):
+// unpaid days worked + pro-rated 13th month + unused-leave conversion, less any
+// remaining deductibles. Carries the quitclaim and the employee's acceptance; on
+// acceptance the login is scheduled to close 48h later (record kept for admins).
+db.exec(`
+CREATE TABLE IF NOT EXISTS final_pay (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  employee_code TEXT NOT NULL,
+  user_id INTEGER,
+  location_id TEXT,
+  status TEXT NOT NULL DEFAULT 'issued',   -- issued | accepted | closed
+  reason TEXT,                             -- terminated | resigned | awol
+  separation_date TEXT,
+  breakdown_json TEXT NOT NULL,            -- the full computed breakdown
+  net REAL NOT NULL,
+  signed_name TEXT,                        -- employee's acceptance signature
+  accepted_at TEXT,
+  close_at TEXT,                           -- accepted_at + 48h: login closes after this
+  closed_at TEXT,
+  created_by INTEGER, created_role TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_finalpay_code ON final_pay(employee_code);
+`);
+
 // Authenticator-app (TOTP) 2FA, used for self-service password reset.
 try { db.exec("ALTER TABLE users ADD COLUMN totp_secret TEXT"); } catch (e) { /* column already present */ }
 try { db.exec("ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* column already present */ }
