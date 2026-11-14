@@ -1541,7 +1541,59 @@
       var w = words(pesos); w = w.charAt(0).toUpperCase() + w.slice(1);
       return w + ' Pesos' + (cents > 0 ? ' and ' + words(cents) + ' Centavos' : '') + ' (PHP ' + pesos.toLocaleString('en-PH') + '.' + ('0' + cents).slice(-2) + ')';
     }
+    var FP_SEP = { terminated: 'Terminated', resigned: 'Resigned', awol: 'AWOL' };
+    // Final payslip in the SAME layout as a normal payslip (earnings / deductions
+    // columns, NET, and the day-by-day DTR for the unpaid days worked).
     function fpBreakdownHTML(b) {
+      if (!b || !b.earnings) return fpLegacyHTML(b || {});
+      var c = (state.profile && state.profile.company) || {};
+      var earn = b.earnings.map(function (e) {
+        return '<tr><td>' + esc(e.name) + (e.taxable === false ? ' <span class="muted">(non-tax)</span>' : '') + '</td><td class="num">' + peso(e.amount) + '</td></tr>';
+      }).join('');
+      var ded = (b.deductions || []).length ? b.deductions.map(function (d) { return '<tr><td>' + esc(d.name) + '</td><td class="num">' + peso(d.amount) + '</td></tr>'; }).join('') : '<tr><td class="muted">None</td><td></td></tr>';
+      var dtr = b.dtr || {};
+      var dtrDetail = '';
+      if (dtr.details && dtr.details.length) {
+        var drows = dtr.details.map(function (d) {
+          var dl = PS_DAY[d.dayType] || d.dayType; if (d.restDay) dl += ' (RD)';
+          if (d.workMode === 'wfh') dl += ' (WFH)'; else if (d.workMode === 'field') dl += ' (FW)';
+          var regCell;
+          if (d.absent) regCell = 'ABSENT';
+          else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
+          else regCell = (d.regularMinutes / 60).toFixed(2);
+          return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + '</td><td class="num">' + regCell +
+            '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) + '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
+            '</td><td class="num">' + (d.lateMinutes || 0) + '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
+        }).join('');
+        dtrDetail = '<div><h4>Unpaid Days Worked — Daily Time Record</h4><table class="ps-dtr-tbl"><thead><tr><th>Date</th><th>Day Type</th>' +
+          '<th class="num">Reg h</th><th class="num">OT h</th><th class="num">ND h</th><th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
+          '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
+          '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td><td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+          '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td><td class="num"><b>' + (dtr.lateMinutes || 0) + '</b></td>' +
+          '<td class="num"><b>' + (dtr.undertimeMinutes || 0) + '</b></td></tr></tfoot></table></div>';
+      }
+      var cov = b.coverage || {};
+      var covTxt = (cov.periods && cov.periods.length) ? esc(cov.periods.join(', ')) : '—';
+      var foot = '<div style="margin-top:12px"><table class="ps-mini">' +
+        '<tr><td>Days Present</td><td>' + (dtr.daysPresent || 0) + '</td><td>OT Hours</td><td>' + ((dtr.otMinutes || 0) / 60).toFixed(2) + 'h</td><td>Night Diff</td><td>' + ((dtr.nightDiffMinutes || 0) / 60).toFixed(2) + 'h</td></tr>' +
+        '<tr><td>Unpaid salary</td><td>' + peso(b.unpaid.total) + '</td><td>13th month</td><td>' + peso(b.thirteenth.amount) + '</td><td>SIL conv.</td><td>' + peso(b.sil.amount) + '</td></tr>' +
+        '<tr><td>Deductibles</td><td>' + peso(b.deductibles.total) + '</td><td>Late</td><td>' + (dtr.lateMinutes || 0) + 'm</td><td>Undertime</td><td>' + (dtr.undertimeMinutes || 0) + 'm</td></tr>' +
+        '</table></div>';
+      return '<div class="pslip">' +
+        '<div class="ps-head"><div><div class="ps-co">' + esc(c.name || 'Company') + '</div>' +
+        '<div class="ps-co-sub">' + esc(c.address || '') + (c.tin ? ' • TIN ' + esc(c.tin) : '') + '</div></div><div class="ps-title">FINAL PAYSLIP</div></div>' +
+        '<div class="ps-meta"><div><b>' + esc(b.employeeName || '') + '</b> (' + esc(b.employeeCode || '') + ')' +
+        (b.position ? '<br><span class="muted">' + esc(b.position) + (b.department ? ' • ' + esc(b.department) : '') + '</span>' : '') + '</div>' +
+        '<div>Separation: ' + esc(FP_SEP[b.status] || b.status || '') + (b.separationDate ? '<br>Date: ' + esc(b.separationDate) : '') + '</div>' +
+        '<div>Unpaid coverage:<br>' + covTxt + (b.bankName ? '<br>Credit to: ' + esc(b.bankName) + ' ' + esc(b.bankAccountNumber || '') : '') + '</div></div>' +
+        '<div class="ps-cols"><div class="ps-col"><h4>Earnings</h4><table><tbody>' + earn + '</tbody><tfoot><tr><td><b>Gross Final Pay</b></td><td class="num"><b>' + peso(b.gross) + '</b></td></tr></tfoot></table></div>' +
+        '<div class="ps-col"><h4>Deductions</h4><table><tbody>' + ded + '</tbody><tfoot><tr><td><b>Total Deductions</b></td><td class="num"><b>' + peso(b.totalDeductions) + '</b></td></tr></tfoot></table></div></div>' +
+        '<div class="ps-net">NET FINAL PAY <span>' + peso(b.net) + '</span></div>' +
+        dtrDetail + foot +
+        '<div class="ps-sign"><div>_____________________<br>Employee Signature</div><div>_____________________<br>Authorized Signatory</div></div></div>';
+    }
+    // Legacy summary layout — for final pays issued before the payslip-style format.
+    function fpLegacyHTML(b) {
       function rowsOf(items) { return (items || []).map(function (i) { return '<tr><td>' + esc(i.name || i.period) + '</td><td class="num">' + peso(i.amount) + '</td></tr>'; }).join(''); }
       return '<table style="width:100%;border-collapse:collapse" class="fp-tbl"><tbody>' +
         '<tr><th colspan="2" style="text-align:left">Unpaid salary (days worked)</th></tr>' + rowsOf(b.unpaid.items) +
@@ -1597,11 +1649,11 @@
             '<button class="btn" id="fpPrint">Print / Save PDF</button>' +
             '<span id="fpMsg" class="msg"></span></div></div>';
         }
-        view.innerHTML = head + qc + action;
+        view.innerHTML = '<style>' + PSLIP_CSS + '</style>' + head + qc + action;
         var printDoc = function () {
           var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Final Pay — ' + esc(b.employeeName || '') + '</title>' +
-            '<style>body{font-family:Arial,sans-serif;margin:16px}table{width:100%;border-collapse:collapse}.fp-tbl td,.fp-tbl th{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left}.num{text-align:right}tfoot td{border-top:2px solid #111;font-weight:bold}</style></head><body>' +
-            '<h2>Final Pay — ' + esc(b.employeeName || '') + '</h2>' + fpBreakdownHTML(b) + '<div style="margin-top:20px"></div>' + fpQuitclaimHTML(b, fp.signed_name, fp.accepted_at) + '</body></html>';
+            '<style>body{margin:16px;background:#fff}' + PSLIP_CSS + '.fp-tbl td,.fp-tbl th{padding:4px 6px;border-bottom:1px solid #ddd;text-align:left}.fp-tbl .num{text-align:right}</style></head><body>' +
+            fpBreakdownHTML(b) + '<div style="margin-top:20px"></div>' + fpQuitclaimHTML(b, fp.signed_name, fp.accepted_at) + '</body></html>';
           var w = window.open('', '_blank'); if (!w) { window.print(); return; }
           w.document.write(html); w.document.close(); w.focus(); setTimeout(function () { w.print(); }, 300);
         };

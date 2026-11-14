@@ -2578,7 +2578,14 @@
     // A. Unpaid days worked — every non-finalized period with this employee's DTR.
     // Compute per-employee directly: runPeriod() skips non-active employees, and a
     // separated employee (resigned/terminated/AWOL) is exactly who this is for.
+    // Collect the full payslip detail (gross earnings, statutory deductions, DTR)
+    // so the final payslip can show the SAME breakdown a normal payslip does.
     var unpaidItems = [], unpaidPay = 0, unpaidBasic = 0;
+    var earnMap = {}, earnOrder = [], dedMap = {}, dedOrder = [];
+    var dtrAll = { details: [], regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0, daysPresent: 0, daysAbsent: 0 };
+    var covFrom = '', covTo = '', covNames = [];
+    function addEarn(nm, amt, taxable) { if (!(nm in earnMap)) { earnMap[nm] = { name: nm, amount: 0, taxable: taxable !== false }; earnOrder.push(nm); } earnMap[nm].amount += amt; }
+    function addDed(nm, amt) { if (!(nm in dedMap)) { dedMap[nm] = { name: nm, amount: 0 }; dedOrder.push(nm); } dedMap[nm].amount += amt; }
     S.list('periods').filter(function (p) { return p.status !== 'finalized'; }).forEach(function (p) {
       var dtr = (S.db.dtr[p.id] || {})[emp.id];
       if (!dtr || !dtr.length) return;
@@ -2593,7 +2600,30 @@
       var loanInPeriod = (res.loanDeductions || []).reduce(function (s, l) { return s + l.amount; }, 0);
       var netBeforeLoans = round2(res.netPay + loanInPeriod); // loans settled in full below
       unpaidPay += netBeforeLoans;
-      (res.earnings || []).forEach(function (e) { if (/^Basic Pay/.test(e.name)) unpaidBasic += e.amount; });
+      (res.earnings || []).forEach(function (e) {
+        if (/^Basic Pay/.test(e.name)) unpaidBasic += e.amount;
+        addEarn(e.name, e.amount, e.taxable);
+      });
+      // Statutory / other deductions for the period — but DROP the loan installment
+      // for this cut-off (loanId-tagged); the full outstanding balance is settled in
+      // section D, so including the installment here would double-count it.
+      (res.deductions || []).forEach(function (d) {
+        if (d.loanId != null) return;
+        addDed(d.name, d.amount);
+      });
+      ((res.dtr && res.dtr.details) || []).forEach(function (d) { dtrAll.details.push(d); });
+      if (res.dtr) {
+        dtrAll.regularMinutes += res.dtr.regularMinutes || 0;
+        dtrAll.otMinutes += res.dtr.otMinutes || 0;
+        dtrAll.nightDiffMinutes += res.dtr.nightDiffMinutes || 0;
+        dtrAll.lateMinutes += res.dtr.lateMinutes || 0;
+        dtrAll.undertimeMinutes += res.dtr.undertimeMinutes || 0;
+        dtrAll.daysPresent += res.dtr.daysPresent || 0;
+        dtrAll.daysAbsent += res.dtr.daysAbsent || 0;
+      }
+      if (p.startDate && (!covFrom || p.startDate < covFrom)) covFrom = p.startDate;
+      if (p.endDate && (!covTo || p.endDate > covTo)) covTo = p.endDate;
+      covNames.push(p.name);
       unpaidItems.push({ period: p.name, amount: netBeforeLoans });
     });
     unpaidPay = round2(unpaidPay);
@@ -2608,11 +2638,23 @@
     var loans = S.list('loans').filter(function (l) { return l.employeeId === emp.id && l.active !== false && (l.balance || 0) > 0; });
     var dedItems = loans.map(function (l) { return { name: l.type + (l.reference ? ' (' + l.reference + ')' : ''), amount: round2(l.balance || 0) }; });
     var deductibles = round2(dedItems.reduce(function (s, d) { return s + d.amount; }, 0));
-    var net = round2(unpaidPay + thirteenth + silPay - deductibles);
+    // ---- Assemble payslip-style earnings & deductions ----
+    var finalEarnings = earnOrder.map(function (k) { return { name: earnMap[k].name, amount: round2(earnMap[k].amount), taxable: earnMap[k].taxable }; });
+    if (thirteenth > 0) finalEarnings.push({ name: 'Pro-rated 13th month pay — basic ' + money(basicYear) + ' ÷ 12' + (released13 ? ' less ' + money(released13) + ' released' : ''), amount: thirteenth, taxable: false });
+    if (silPay > 0) finalEarnings.push({ name: 'Unused leave / SIL conversion — ' + creditsLeft + ' day' + (creditsLeft === 1 ? '' : 's') + ' × ' + money(round2(r.daily)), amount: silPay, taxable: false });
+    var finalDeductions = dedOrder.map(function (k) { return { name: dedMap[k].name, amount: round2(dedMap[k].amount) }; });
+    dedItems.forEach(function (d) { finalDeductions.push({ name: d.name + ' — full settlement', amount: d.amount }); });
+    var gross = round2(finalEarnings.reduce(function (s, e) { return s + e.amount; }, 0));
+    var totalDeductions = round2(finalDeductions.reduce(function (s, d) { return s + d.amount; }, 0));
+    var net = round2(gross - totalDeductions);
     return {
       employeeCode: emp.code, employeeName: name(emp), position: emp.position || '', department: emp.department || '',
       status: empStatusVal(emp), year: year, dailyRate: round2(r.daily), monthlyBasic: round2(r.monthlyBasic),
       hireDate: emp.hireDate || '', separationDate: '',
+      bankName: emp.bankName || '', bankAccountNumber: emp.bankAccountNumber || '',
+      coverage: { from: covFrom, to: covTo, periods: covNames },
+      earnings: finalEarnings, deductions: finalDeductions, dtr: dtrAll,
+      gross: gross, totalDeductions: totalDeductions,
       unpaid: { items: unpaidItems, total: unpaidPay },
       thirteenth: { basicYear: basicYear, released: released13, amount: thirteenth },
       sil: { creditsLeft: creditsLeft, dailyRate: round2(r.daily), amount: silPay },
@@ -2620,8 +2662,67 @@
       net: net
     };
   }
-  // Payslip-style breakdown of a final pay (used for admin preview + print).
+  // Final payslip rendered in the SAME layout as a normal payslip (earnings /
+  // deductions columns, NET, and a day-by-day DTR for the unpaid days worked).
   function finalPayBreakdownHTML(b) {
+    if (!b || !b.earnings) return finalPayLegacyHTML(b || {});
+    var comp = S.db.meta.company || {};
+    var earn = b.earnings.map(function (e) {
+      return '<tr><td>' + esc(e.name) + (e.taxable === false ? ' <span class="tag">non-tax</span>' : '') + '</td><td class="num">' + money(e.amount) + '</td></tr>';
+    }).join('');
+    var ded = b.deductions.length ? b.deductions.map(function (d) {
+      return '<tr><td>' + esc(d.name) + '</td><td class="num">' + money(d.amount) + '</td></tr>';
+    }).join('') : '<tr><td class="muted">None</td><td></td></tr>';
+    var dtr = b.dtr || {};
+    var dtrDetail = '';
+    if (dtr.details && dtr.details.length) {
+      var drows = dtr.details.map(function (d) {
+        var dl = (DAY_LABELS[d.dayType] && DAY_LABELS[d.dayType].label) || d.dayType;
+        if (d.restDay) dl += ' (RD)';
+        if (d.workMode === 'wfh') dl += ' (WFH)'; else if (d.workMode === 'field') dl += ' (FW)';
+        var regCell;
+        if (d.absent) regCell = 'ABSENT';
+        else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
+        else regCell = (d.regularMinutes / 60).toFixed(2);
+        return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + '</td><td class="num">' + regCell +
+          '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) + '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
+          '</td><td class="num">' + (d.lateMinutes || 0) + '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
+      }).join('');
+      dtrDetail = '<div class="ps-dtr"><h4>Unpaid Days Worked — Daily Time Record</h4>' +
+        '<table class="ps-tbl ps-dtr-tbl"><thead><tr><th>Date</th><th>Day Type</th>' +
+        '<th class="num">Reg h</th><th class="num">OT h</th><th class="num">ND h</th><th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
+        '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
+        '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.lateMinutes || 0) + '</b></td>' +
+        '<td class="num"><b>' + (dtr.undertimeMinutes || 0) + '</b></td></tr></tfoot></table></div>';
+    }
+    var cov = b.coverage || {};
+    var covTxt = (cov.periods && cov.periods.length) ? esc(cov.periods.join(', ')) : '—';
+    return '<div class="payslip">' +
+      '<div class="ps-head"><div><div class="ps-co">' + esc(comp.name || 'Company') + '</div>' +
+      '<div class="ps-co-sub">' + esc(comp.address || '') + (comp.tin ? ' • TIN ' + esc(comp.tin) : '') + '</div></div>' +
+      '<div class="ps-title">FINAL PAYSLIP</div></div>' +
+      '<div class="ps-meta"><div><b>' + esc(b.employeeName || '') + '</b> (' + esc(b.employeeCode || '') + ')' +
+      (b.position ? '<br><span class="muted">' + esc(b.position) + (b.department ? ' • ' + esc(b.department) : '') + '</span>' : '') + '</div>' +
+      '<div>Separation: ' + esc(SEP_LABEL[b.status] || b.status || '') + (b.separationDate ? '<br>Date: ' + esc(b.separationDate) : '') + '</div>' +
+      '<div>Unpaid coverage:<br>' + covTxt + (b.bankName ? '<br>Credit to: ' + esc(b.bankName) + ' ' + esc(b.bankAccountNumber || '') : '') + '</div></div>' +
+      '<div class="ps-cols"><div class="ps-col"><h4>Earnings</h4><table class="ps-tbl"><tbody>' + earn +
+      '</tbody><tfoot><tr><td><b>Gross Final Pay</b></td><td class="num"><b>' + money(b.gross) + '</b></td></tr></tfoot></table></div>' +
+      '<div class="ps-col"><h4>Deductions</h4><table class="ps-tbl"><tbody>' + ded +
+      '</tbody><tfoot><tr><td><b>Total Deductions</b></td><td class="num"><b>' + money(b.totalDeductions) + '</b></td></tr></tfoot></table></div></div>' +
+      '<div class="ps-net">NET FINAL PAY <span>' + money(b.net) + '</span></div>' +
+      dtrDetail +
+      '<div class="ps-foot"><table class="ps-mini">' +
+      '<tr><td>Days Present</td><td>' + (dtr.daysPresent || 0) + '</td><td>OT Hours</td><td>' + ((dtr.otMinutes || 0) / 60).toFixed(2) + '</td><td>Night Diff</td><td>' + ((dtr.nightDiffMinutes || 0) / 60).toFixed(2) + '</td></tr>' +
+      '<tr><td>Unpaid salary</td><td>' + money(b.unpaid.total) + '</td><td>13th month</td><td>' + money(b.thirteenth.amount) + '</td><td>SIL conv.</td><td>' + money(b.sil.amount) + '</td></tr>' +
+      '<tr><td>Deductibles</td><td>' + money(b.deductibles.total) + '</td><td>Late</td><td>' + (dtr.lateMinutes || 0) + 'm</td><td>Undertime</td><td>' + (dtr.undertimeMinutes || 0) + 'm</td></tr>' +
+      '</table></div>' +
+      '<div class="ps-sign"><div>_____________________<br>Employee Signature</div><div>_____________________<br>Authorized Signatory</div></div></div>';
+  }
+  // Legacy summary layout — for final pays issued before the payslip-style format.
+  function finalPayLegacyHTML(b) {
     function rowsOf(items) { return (items || []).map(function (i) { return '<tr><td>' + esc(i.name || i.period) + '</td><td class="num">' + money(i.amount) + '</td></tr>'; }).join(''); }
     return '<table class="tbl rpt-tbl"><tbody>' +
       '<tr><th colspan="2" style="text-align:left">Unpaid salary (days worked)</th></tr>' + rowsOf(b.unpaid.items) +
