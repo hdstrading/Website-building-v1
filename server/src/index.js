@@ -991,7 +991,7 @@ app.get('/api/leave-calendar', A.requireRole('superadmin', 'admin_payroll', 'fin
   const rows = db.prepare(
     `SELECT lr.employee_code, lr.date_from, lr.date_to, lr.leave_type, lr.status, lr.reason, u.full_name, u.email
      FROM leave_requests lr JOIN users u ON u.id = lr.user_id
-     WHERE lr.status != 'rejected' ORDER BY lr.date_from`
+     WHERE lr.status NOT IN ('rejected','cancelled') ORDER BY lr.date_from`
   ).all();
   res.json({ requests: scopeRequestRows(req, rows) });
 });
@@ -1044,6 +1044,87 @@ app.post('/api/admin/leave-requests/:id', canDecide, (req, res) => {
   notify(row.user_id, 'leave', 'Leave ' + decision,
     row.leave_type + ' leave for ' + row.date_from + (row.date_to !== row.date_from ? ' → ' + row.date_to : '') + ' was ' + decision + '.');
   audit(req, decision, 'leave request', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.leave_type + ' ' + row.date_from + '→' + row.date_to + ' ' + decision);
+  res.json({ ok: true, companyChanged: companyChanged });
+});
+
+// Add or remove leave-only DTR rows for a date range in the employee's open
+// (non-finalized) periods. add=true tags blank/rest/new days as paid leave;
+// add=false removes leave-only rows we previously added. Worked/absent days are
+// never touched. Returns true if any day changed. (Shared by cancel/reschedule.)
+function syncLeaveDtr(data, emp, fromDate, toDate, leaveType, add) {
+  let touched = false;
+  datesInRange(fromDate, toDate).forEach(function (date) {
+    const period = periodForDateLoc(data, date, emp.locationId);
+    if (!period || period.status === 'finalized') return;
+    data.dtr = data.dtr || {}; data.dtr[period.id] = data.dtr[period.id] || {};
+    const days = data.dtr[period.id][emp.id] = data.dtr[period.id][emp.id] || [];
+    const idx = days.findIndex(function (d) { return d.date === date; });
+    if (add) {
+      if (idx < 0) { days.push({ date: date, leaveType: leaveType, leavePaid: true, dayType: 'regular' }); touched = true; }
+      else if (!days[idx].timeIn && !days[idx].timeOut && !days[idx].absent) {
+        days[idx].leaveType = leaveType; days[idx].leavePaid = true; touched = true;
+      }
+    } else if (idx >= 0 && days[idx].leaveType === leaveType && !days[idx].timeIn && !days[idx].timeOut) {
+      days.splice(idx, 1); touched = true;
+    }
+  });
+  return touched;
+}
+
+// Cancel a booked (or pending) leave. Removes its paid-leave days from the DTR
+// (credits are computed live from the DTR, so this restores them) and marks the
+// request 'cancelled'. The employee keeps the record but it no longer applies.
+app.post('/api/admin/leave-requests/:id/cancel', canDecide, (req, res) => {
+  const row = db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Leave request not found.' });
+  if (row.status === 'cancelled' || row.status === 'rejected') {
+    return res.status(400).json({ error: 'This leave is already ' + row.status + '.' });
+  }
+  let companyChanged = false;
+  try {
+    const data = getCompanyData();
+    const emp = findEmpByCode(data, row.employee_code);
+    if (emp && row.status === 'approved') {
+      if (syncLeaveDtr(data, emp, row.date_from, row.date_to, row.leave_type, false)) {
+        try { saveCompanyData(data); companyChanged = true; } catch (e) { /* reconcile will not re-add a cancelled leave */ }
+      }
+    }
+  } catch (e) { console.error('leave cancel DTR sync failed', e.message); }
+  db.prepare("UPDATE leave_requests SET status='cancelled', reviewed_by=?, reviewed_at=datetime('now') WHERE id=?")
+    .run(req.user.id, req.params.id);
+  notify(row.user_id, 'leave', 'Leave cancelled',
+    row.leave_type + ' leave for ' + row.date_from + (row.date_to !== row.date_from ? ' → ' + row.date_to : '') + ' was cancelled by payroll admin.');
+  audit(req, 'cancel', 'leave request', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.leave_type + ' ' + row.date_from + '→' + row.date_to + ' cancelled');
+  res.json({ ok: true, companyChanged: companyChanged });
+});
+
+// Reschedule a booked (or pending) leave to new dates. For an approved leave the
+// old paid-leave days are cleared from the DTR and the new range is tagged; a
+// pending leave just has its dates updated. Status is preserved.
+app.post('/api/admin/leave-requests/:id/reschedule', canDecide, (req, res) => {
+  const { dateFrom, dateTo } = req.body || {};
+  if (!dateFrom || !dateTo) return res.status(400).json({ error: 'New start and end dates are required.' });
+  if (dateTo < dateFrom) return res.status(400).json({ error: 'End date cannot be before the start date.' });
+  const row = db.prepare('SELECT * FROM leave_requests WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Leave request not found.' });
+  if (['approved', 'pending'].indexOf(row.status) < 0) {
+    return res.status(400).json({ error: 'Only an active (pending or approved) leave can be rescheduled.' });
+  }
+  let companyChanged = false;
+  try {
+    const data = getCompanyData();
+    const emp = findEmpByCode(data, row.employee_code);
+    if (emp && row.status === 'approved') {
+      let touched = syncLeaveDtr(data, emp, row.date_from, row.date_to, row.leave_type, false); // clear old
+      if (syncLeaveDtr(data, emp, dateFrom, dateTo, row.leave_type, true)) touched = true;        // tag new
+      if (touched) { try { saveCompanyData(data); companyChanged = true; } catch (e) { /* reconcile retries */ } }
+    }
+  } catch (e) { console.error('leave reschedule DTR sync failed', e.message); }
+  db.prepare("UPDATE leave_requests SET date_from=?, date_to=?, reviewed_by=?, reviewed_at=datetime('now') WHERE id=?")
+    .run(dateFrom, dateTo, req.user.id, req.params.id);
+  notify(row.user_id, 'leave', 'Leave rescheduled',
+    row.leave_type + ' leave was moved to ' + dateFrom + (dateTo !== dateFrom ? ' → ' + dateTo : '') + ' by payroll admin.');
+  audit(req, 'reschedule', 'leave request', (row.employee_code || ('user ' + row.user_id)) + ' ' + row.leave_type + ' ' + row.date_from + '→' + row.date_to + ' moved to ' + dateFrom + '→' + dateTo);
   res.json({ ok: true, companyChanged: companyChanged });
 });
 

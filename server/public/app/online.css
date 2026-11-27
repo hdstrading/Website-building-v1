@@ -47,4 +47,7 @@
 .acc-badge.active { background: #dcfce7; color: #15803d; }
 .acc-badge.pending { background: #fef3c7; color: #b45309; }
 .acc-badge.disabled { background: #fee2e2; color: #b91c1c; }
+.acc-badge.approved { background: #dcfce7; color: #15803d; }
+.acc-badge.rejected { background: #fee2e2; color: #b91c1c; }
+.acc-badge.cancelled { background: #e2e8f0; color: #64748b; }
 .acc-modal select { padding: 6px 8px; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 13px; }
