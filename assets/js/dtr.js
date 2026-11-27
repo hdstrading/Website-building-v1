@@ -545,7 +545,102 @@
     return { date: normaliseDate(s), time: '' };
   }
 
+  // Inclusive list of YYYY-MM-DD dates from `from` to `to`.
+  function datesInRangeLocal(from, to) {
+    var out = [];
+    var a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00');
+    if (isNaN(a.getTime()) || isNaN(b.getTime())) return out;
+    for (var d = a; d <= b; d.setDate(d.getDate() + 1)) {
+      out.push(d.getFullYear() + '-' + pad2n(d.getMonth() + 1) + '-' + pad2n(d.getDate()));
+    }
+    return out;
+  }
+
+  /* Tacloban "Attendance Record Report" — a TAB-separated weekly grid.
+   *   Att. Time   <start> ~ <end>        (the week covered)
+   *   14  15  16  17  18  19  20         (day-of-month header, one per column)
+   *   ID:   <id>        Name:  <name>    Dept.:  <dept>
+   *   <punch cells...>                   (one cell per day column; same columns)
+   * Each punch cell is a run of concatenated HH:MM times with no separator, e.g.
+   * "07:5512:0112:5817:15" -> 07:55, 12:01, 12:58, 17:15. First = time-in, last =
+   * time-out; with 4+ punches the 2nd and 2nd-to-last are the lunch out/in. Empty
+   * cell = no punches that day (rest day). Keyed by device ID (match via the
+   * employee's Biometric/Device ID). Returns {} if the text isn't this format. */
+  function importAttendanceRecordReport(text) {
+    var lines = String(text || '').split(/\r?\n/);
+    var rows = lines.map(function (ln) { return ln.split('\t'); });
+    // 1. Date range from the "Att. Time <start> ~ <end>" line.
+    var start = null, end = null;
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+      if (m) { start = m[1]; end = m[2]; break; }
+    }
+    // 2. Day-number header row (≥3 cells that are bare 1–31 integers).
+    var dayCols = [];
+    for (var r = 0; r < rows.length; r++) {
+      var cand = [];
+      rows[r].forEach(function (v, c) {
+        var t = (v || '').trim();
+        if (/^\d{1,2}$/.test(t)) { var d = +t; if (d >= 1 && d <= 31) cand.push({ col: c, day: d }); }
+      });
+      if (cand.length >= 3) { dayCols = cand; break; }
+    }
+    if (!dayCols.length) return {};
+    // 3. Resolve each day column to a full date.
+    var rangeDates = (start && end) ? datesInRangeLocal(start, end) : [];
+    var dateForCol = {};
+    dayCols.forEach(function (dc) {
+      var dt = null;
+      if (rangeDates.length) {
+        for (var k = 0; k < rangeDates.length; k++) { if (+rangeDates[k].slice(8, 10) === dc.day) { dt = rangeDates[k]; break; } }
+      }
+      if (!dt && start) {
+        var sy = +start.slice(0, 4), sm = +start.slice(5, 7), sd = +start.slice(8, 10);
+        var yy = sy, mm = sm;
+        if (dc.day < sd) { mm++; if (mm > 12) { mm = 1; yy++; } }
+        dt = yy + '-' + pad2n(mm) + '-' + pad2n(dc.day);
+      }
+      if (dt) dateForCol[dc.col] = dt;
+    });
+    // 4. Walk the "ID:" blocks; the next row holds that employee's punch cells.
+    var out = {};
+    for (var r2 = 0; r2 < rows.length; r2++) {
+      var cells = rows[r2];
+      var idCell = -1;
+      for (var c2 = 0; c2 < cells.length; c2++) { if ((cells[c2] || '').trim().toLowerCase() === 'id:') { idCell = c2; break; } }
+      if (idCell < 0) continue;
+      var id = '';
+      for (var c3 = idCell + 1; c3 < cells.length; c3++) { var vv = (cells[c3] || '').trim(); if (vv) { id = vv; break; } }
+      if (!id) continue;
+      var punch = rows[r2 + 1] || [];
+      var recs = [];
+      Object.keys(dateForCol).forEach(function (colStr) {
+        var col = +colStr;
+        var cell = (punch[col] || '').trim();
+        var toks = cell.match(/\d{2}:\d{2}/g) || [];
+        if (!toks.length) return;
+        var mins = toks.map(function (t) { return { t: t, m: toMinutes(t) }; }).filter(function (x) { return x.m != null; });
+        mins.sort(function (a, b) { return a.m - b.m; });
+        var uniq = []; mins.forEach(function (x) { if (!uniq.length || uniq[uniq.length - 1].m !== x.m) uniq.push(x); });
+        if (!uniq.length) return;
+        var rec = { date: dateForCol[col], timeIn: uniq[0].t, timeOut: uniq.length > 1 ? uniq[uniq.length - 1].t : '' };
+        if (uniq.length >= 4) { rec.lunchOut = uniq[1].t; rec.lunchIn = uniq[uniq.length - 2].t; }
+        recs.push(rec);
+      });
+      if (recs.length) {
+        recs.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+        out[id] = (out[id] || []).concat(recs);
+      }
+    }
+    return out;
+  }
+
   function importBiometricCsv(text) {
+    // Tacloban weekly-grid export (tab-separated) — detect and handle first.
+    if (/Attendance Record Report/i.test(text) || (/Att\.?\s*Time/i.test(text) && /\bID:\t/.test(text))) {
+      var arr = importAttendanceRecordReport(text);
+      if (arr && Object.keys(arr).length) return arr;
+    }
     var rows = parseCSV(text);
     if (!rows.length) return {};
     var header = rows[0].map(function (h) { return h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''); });

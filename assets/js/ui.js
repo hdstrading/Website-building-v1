@@ -790,11 +790,13 @@
         '<input type="file" id="dtrFile" accept=".csv,text/csv">' +
         '<button class="btn" id="dtrImportBtn">Import into Period</button>' +
         '<div id="dtrImportMsg" class="msg"></div>') +
-      card('Import from Biometric Device (NGTeco)',
-        '<p class="muted">Export attendance from <b>NGTeco Office</b> (Excel/CSV) and import it here — punches are ' +
+      card('Import from Biometric Device',
+        '<p class="muted">Export attendance from your time clock and import it here — punches are ' +
         'matched to employees by their <b>Biometric / Device ID</b> (set on the employee\'s profile), then paired ' +
-        'into time-in / time-out per day for the selected period. Handles raw punch logs or in/out summaries.</p>' +
-        '<input type="file" id="bioFile" accept=".csv,text/csv">' +
+        'into time-in / time-out (and lunch) per day for the selected period. The format is auto-detected: ' +
+        '<b>NGTeco</b> raw punch logs / in-out summaries, the <b>Taytay</b> flat CSV (Clock In/Out), and the ' +
+        '<b>Tacloban</b> weekly "Attendance Record Report" grid.</p>' +
+        '<input type="file" id="bioFile" accept=".csv,.txt,.tsv,text/csv,text/plain,text/tab-separated-values">' +
         '<button class="btn" id="bioImportBtn">Import Attendance</button>' +
         '<div id="bioImportMsg" class="msg"></div>') +
       card('DTR Status — ' + esc(period.name),
