@@ -42,9 +42,9 @@ CREATE TABLE IF NOT EXISTS leave_requests (
   employee_code TEXT,
   date_from TEXT NOT NULL,
   date_to TEXT NOT NULL,
-  leave_type TEXT NOT NULL DEFAULT 'VL',          -- SL | VL | EL
+  leave_type TEXT NOT NULL DEFAULT 'VL',          -- SL | VL | EL | UAL
   reason TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending',         -- pending | approved | rejected
+  status TEXT NOT NULL DEFAULT 'pending',         -- pending | approved | rejected | cancelled
   reviewed_by INTEGER,
   reviewed_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))

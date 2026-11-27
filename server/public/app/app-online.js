@@ -261,22 +261,60 @@
       body.innerHTML = calWrap + '<h4 style="margin:6px 0">All Leave Requests</h4>' +
         '<table class="acc-tbl"><thead><tr><th>Employee</th><th>Dates</th><th>Type</th><th>Status</th><th></th></tr></thead><tbody>' +
         reqs.map(function (x) {
-          return '<tr data-lid="' + x.id + '"><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.date_from) + ' → ' + esc(x.date_to) +
+          return '<tr data-lid="' + x.id + '" data-from="' + esc(x.date_from) + '" data-to="' + esc(x.date_to) +
+            '" data-type="' + esc(x.leave_type) + '" data-name="' + esc(x.full_name || x.email) + '"><td>' + esc(x.full_name || x.email) + '</td><td>' + esc(x.date_from) + ' → ' + esc(x.date_to) +
             (x.reason ? '<div class="acc-muted">' + esc(x.reason) + '</div>' : '') + '</td><td>' + esc(x.leave_type) + '</td>' +
             '<td><span class="acc-badge ' + x.status + '">' + x.status + '</span></td>' +
-            '<td class="acc-actions">' + (x.status === 'pending' ? '<button class="acc-btn l-ok">Approve</button><button class="acc-btn ghost l-no">Reject</button>' : '') + '</td></tr>';
+            '<td class="acc-actions">' +
+            (x.status === 'pending' ? '<button class="acc-btn l-ok">Approve</button><button class="acc-btn ghost l-no">Reject</button>' : '') +
+            (x.status === 'pending' || x.status === 'approved' ? '<button class="acc-btn ghost l-resched">Reschedule</button>' : '') +
+            (x.status === 'approved' ? '<button class="acc-btn ghost l-cancel">Cancel</button>' : '') +
+            '</td></tr>';
         }).join('') + '</tbody></table>';
       body.querySelectorAll('tr[data-lid]').forEach(function (tr) {
         var lid = tr.dataset.lid;
         var ok = tr.querySelector('.l-ok'), no = tr.querySelector('.l-no');
+        var rs = tr.querySelector('.l-resched'), cx = tr.querySelector('.l-cancel');
         if (ok) ok.onclick = function () { decide(lid, 'approved'); };
         if (no) no.onclick = function () { decide(lid, 'rejected'); };
+        if (cx) cx.onclick = function () { cancelLeave(lid); };
+        if (rs) rs.onclick = function () { rescheduleLeave(tr); };
       });
       function decide(lid, d) {
         api('/api/admin/leave-requests/' + lid, { method: 'POST', body: JSON.stringify({ decision: d }) }).then(function (r) {
           if (r.body && r.body.companyChanged) refreshCompany(); // DTR updated server-side (leave applied)
           renderTab('leave');
         });
+      }
+      function cancelLeave(lid) {
+        if (!confirm('Cancel this booked leave?\n\nThe leave days are removed from the employee\'s DTR (credits are restored) and the employee is notified. The record is kept, marked cancelled.')) return;
+        api('/api/admin/leave-requests/' + lid + '/cancel', { method: 'POST' }).then(function (r) {
+          if (!r.ok) { alert((r.body && r.body.error) || 'Could not cancel this leave.'); return; }
+          if (r.body && r.body.companyChanged) refreshCompany();
+          renderTab('leave');
+        });
+      }
+      function rescheduleLeave(tr) {
+        var lid = tr.dataset.lid, from = tr.dataset.from, to = tr.dataset.to, type = tr.dataset.type, nm = tr.dataset.name;
+        var ov = document.createElement('div'); ov.className = 'acc-overlay';
+        ov.innerHTML = '<div class="acc-modal" style="max-width:420px"><div class="acc-head"><b>Reschedule Leave</b><button class="acc-x">✕</button></div>' +
+          '<div class="acc-body"><p class="acc-muted">Move ' + esc(nm) + '\'s <b>' + esc(type) + '</b> leave to new dates. The old days are cleared from the DTR and the new days are tagged as leave.</p>' +
+          '<label style="display:block;margin-bottom:8px">From<br><input type="date" id="rs-from" value="' + esc(from) + '" style="width:100%"></label>' +
+          '<label style="display:block;margin-bottom:12px">To<br><input type="date" id="rs-to" value="' + esc(to) + '" style="width:100%"></label>' +
+          '<button class="acc-btn" id="rs-save">Save new dates</button> <span id="rs-msg" class="acc-muted"></span></div></div>';
+        document.body.appendChild(ov);
+        ov.querySelector('.acc-x').onclick = function () { ov.remove(); };
+        ov.addEventListener('click', function (e) { if (e.target === ov) ov.remove(); });
+        ov.querySelector('#rs-save').onclick = function () {
+          var nf = ov.querySelector('#rs-from').value, nt = ov.querySelector('#rs-to').value, msg = ov.querySelector('#rs-msg');
+          if (!nf || !nt) { msg.textContent = 'Pick both dates.'; return; }
+          if (nt < nf) { msg.textContent = 'End is before start.'; return; }
+          api('/api/admin/leave-requests/' + lid + '/reschedule', { method: 'POST', body: JSON.stringify({ dateFrom: nf, dateTo: nt }) }).then(function (r) {
+            if (!r.ok) { msg.textContent = (r.body && r.body.error) || 'Could not reschedule.'; return; }
+            if (r.body && r.body.companyChanged) refreshCompany();
+            ov.remove(); renderTab('leave');
+          });
+        };
       }
       drawLeaveCalendar(reqs);
     }
