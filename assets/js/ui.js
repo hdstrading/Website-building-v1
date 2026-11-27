@@ -1587,7 +1587,7 @@
         else regCell = (d.regularMinutes / 60).toFixed(2);
         return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) +
           '</td><td class="num">' + regCell +
-          '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) +
+          '</td><td class="num">' + (((d.otMinutes || 0) + (d.preOtMinutes || 0)) / 60).toFixed(2) + ((d.preOtMinutes || 0) > 0 ? '<span class="sub"> pre</span>' : '') +
           '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
           '</td><td class="num">' + (d.lateMinutes || 0) +
           '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
@@ -1598,7 +1598,7 @@
         '<th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
         '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
         '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td>' +
-        '<td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (((dtr.otMinutes || 0) + (dtr.preOtMinutes || 0)) / 60).toFixed(2) + '</b></td>' +
         '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td>' +
         '<td class="num"><b>' + dtr.lateMinutes + '</b></td>' +
         '<td class="num"><b>' + dtr.undertimeMinutes + '</b></td></tr></tfoot></table></div>';
@@ -1633,7 +1633,7 @@
       '<div class="ps-net">NET PAY <span>' + money(r.netPay) + '</span></div>' +
       dtrDetail + notesSection +
       '<div class="ps-foot"><table class="ps-mini"><tr><td>Days Present</td><td>' + dtr.daysPresent +
-      '</td><td>OT Hours</td><td>' + hrs(dtr.otMinutes) + '</td><td>Night Diff</td><td>' + hrs(dtr.nightDiffMinutes) + '</td></tr>' +
+      '</td><td>OT Hours</td><td>' + hrs(dtr.otMinutes + (dtr.preOtMinutes || 0)) + '</td><td>Night Diff</td><td>' + hrs(dtr.nightDiffMinutes) + '</td></tr>' +
       '<tr><td>Absences</td><td>' + dtr.daysAbsent + '</td><td>Late</td><td>' + dtr.lateMinutes +
       'm</td><td>Undertime</td><td>' + dtr.undertimeMinutes + 'm</td></tr>' +
       '<tr><td>SSS MSC</td><td>' + money(r.contributions.sss.msc) + '</td><td>Taxable</td><td>' + money(r.taxableBase) +
@@ -2582,7 +2582,7 @@
     // so the final payslip can show the SAME breakdown a normal payslip does.
     var unpaidItems = [], unpaidPay = 0, unpaidBasic = 0;
     var earnMap = {}, earnOrder = [], dedMap = {}, dedOrder = [];
-    var dtrAll = { details: [], regularMinutes: 0, otMinutes: 0, nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0, daysPresent: 0, daysAbsent: 0 };
+    var dtrAll = { details: [], regularMinutes: 0, otMinutes: 0, preOtMinutes: 0, nightDiffMinutes: 0, lateMinutes: 0, undertimeMinutes: 0, daysPresent: 0, daysAbsent: 0 };
     var covFrom = '', covTo = '', covNames = [];
     function addEarn(nm, amt, taxable) { if (!(nm in earnMap)) { earnMap[nm] = { name: nm, amount: 0, taxable: taxable !== false }; earnOrder.push(nm); } earnMap[nm].amount += amt; }
     function addDed(nm, amt) { if (!(nm in dedMap)) { dedMap[nm] = { name: nm, amount: 0 }; dedOrder.push(nm); } dedMap[nm].amount += amt; }
@@ -2615,6 +2615,7 @@
       if (res.dtr) {
         dtrAll.regularMinutes += res.dtr.regularMinutes || 0;
         dtrAll.otMinutes += res.dtr.otMinutes || 0;
+        dtrAll.preOtMinutes += res.dtr.preOtMinutes || 0;
         dtrAll.nightDiffMinutes += res.dtr.nightDiffMinutes || 0;
         dtrAll.lateMinutes += res.dtr.lateMinutes || 0;
         dtrAll.undertimeMinutes += res.dtr.undertimeMinutes || 0;
@@ -2685,7 +2686,7 @@
         else if (d.leaveType && d.workedMinutes === 0) { dl = d.leaveType + ' Leave'; regCell = 'LEAVE'; }
         else regCell = (d.regularMinutes / 60).toFixed(2);
         return '<tr><td>' + esc(d.date || '') + '</td><td>' + esc(dl) + '</td><td class="num">' + regCell +
-          '</td><td class="num">' + (d.otMinutes / 60).toFixed(2) + '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
+          '</td><td class="num">' + (((d.otMinutes || 0) + (d.preOtMinutes || 0)) / 60).toFixed(2) + ((d.preOtMinutes || 0) > 0 ? '<span class="sub"> pre</span>' : '') + '</td><td class="num">' + (d.nightDiffMinutes / 60).toFixed(2) +
           '</td><td class="num">' + (d.lateMinutes || 0) + '</td><td class="num">' + (d.undertimeMinutes || 0) + '</td></tr>';
       }).join('');
       dtrDetail = '<div class="ps-dtr"><h4>Unpaid Days Worked — Daily Time Record</h4>' +
@@ -2693,7 +2694,7 @@
         '<th class="num">Reg h</th><th class="num">OT h</th><th class="num">ND h</th><th class="num">Late m</th><th class="num">UT m</th></tr></thead><tbody>' + drows +
         '</tbody><tfoot><tr><td colspan="2"><b>Totals</b></td>' +
         '<td class="num"><b>' + (dtr.regularMinutes / 60).toFixed(2) + '</b></td>' +
-        '<td class="num"><b>' + (dtr.otMinutes / 60).toFixed(2) + '</b></td>' +
+        '<td class="num"><b>' + (((dtr.otMinutes || 0) + (dtr.preOtMinutes || 0)) / 60).toFixed(2) + '</b></td>' +
         '<td class="num"><b>' + (dtr.nightDiffMinutes / 60).toFixed(2) + '</b></td>' +
         '<td class="num"><b>' + (dtr.lateMinutes || 0) + '</b></td>' +
         '<td class="num"><b>' + (dtr.undertimeMinutes || 0) + '</b></td></tr></tfoot></table></div>';
@@ -2715,7 +2716,7 @@
       '<div class="ps-net">NET FINAL PAY <span>' + money(b.net) + '</span></div>' +
       dtrDetail +
       '<div class="ps-foot"><table class="ps-mini">' +
-      '<tr><td>Days Present</td><td>' + (dtr.daysPresent || 0) + '</td><td>OT Hours</td><td>' + ((dtr.otMinutes || 0) / 60).toFixed(2) + '</td><td>Night Diff</td><td>' + ((dtr.nightDiffMinutes || 0) / 60).toFixed(2) + '</td></tr>' +
+      '<tr><td>Days Present</td><td>' + (dtr.daysPresent || 0) + '</td><td>OT Hours</td><td>' + (((dtr.otMinutes || 0) + (dtr.preOtMinutes || 0)) / 60).toFixed(2) + '</td><td>Night Diff</td><td>' + ((dtr.nightDiffMinutes || 0) / 60).toFixed(2) + '</td></tr>' +
       '<tr><td>Unpaid salary</td><td>' + money(b.unpaid.total) + '</td><td>13th month</td><td>' + money(b.thirteenth.amount) + '</td><td>SIL conv.</td><td>' + money(b.sil.amount) + '</td></tr>' +
       '<tr><td>Deductibles</td><td>' + money(b.deductibles.total) + '</td><td>Late</td><td>' + (dtr.lateMinutes || 0) + 'm</td><td>Undertime</td><td>' + (dtr.undertimeMinutes || 0) + 'm</td></tr>' +
       '</table></div>' +
