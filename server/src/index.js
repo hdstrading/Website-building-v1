@@ -133,9 +133,18 @@ function mergeScopedCompanyData(stored, submitted, locationId) {
   Object.keys(stored.otApprovals || {}).forEach(function (empId) { if (!scope[empId]) otA[empId] = stored.otApprovals[empId]; });
   Object.keys(submitted.otApprovals || {}).forEach(function (empId) { if (scope[empId]) otA[empId] = submitted.otApprovals[empId]; });
   merged.otApprovals = otA;
-  // Shared / central-only — never altered by a scoped save.
-  merged.periods = stored.periods;
-  merged.payrolls = stored.payrolls;
+  // Periods: a scoped admin manages only THEIR location's periods (new periods
+  // are tagged with their locationId). Other-location and shared (no locationId)
+  // periods are preserved from storage untouched — a scoped save can neither drop
+  // nor alter them — while the admin's own branch periods (drafts AND finalized)
+  // persist. Without this, a branch admin's periods vanished on save and never
+  // reached the superadmin or employees.
+  const subPeriods = (submitted.periods || []).filter(function (p) { return p.locationId === locationId; });
+  merged.periods = (stored.periods || []).filter(function (p) { return p.locationId !== locationId; }).concat(subPeriods);
+  // Finalized payroll snapshots merge per-employee, exactly like dtr/adjustments,
+  // so a branch's finalized runs persist without touching other branches' snapshots.
+  merged.payrolls = mergeMap(stored.payrolls, submitted.payrolls);
+  // Central-only — never altered by a scoped save.
   merged.thirteenthMonth = stored.thirteenthMonth;
   merged.meta = stored.meta;
   merged.statutoryConfig = stored.statutoryConfig;
