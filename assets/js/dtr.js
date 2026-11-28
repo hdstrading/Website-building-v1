@@ -183,22 +183,42 @@
       return result;
     }
 
+    // Up to four punches: morning-in (timeIn), out for lunch (lunchOut), back from
+    // lunch (lunchIn), afternoon-out (timeOut).
     var inM = toMinutes(day.timeIn);
     var outM = toMinutes(day.timeOut);
-    if (inM == null || outM == null) {
-      // No punches but flagged paid leave / holiday-with-pay handled by payroll
-      return result;
-    }
-    // Optional split-shift lunch punches: morning-in (timeIn), out for lunch
-    // (lunchOut), back from lunch (lunchIn) and afternoon-out (timeOut). When both
-    // lunch punches are present the ACTUAL lunch gap is the break and the day is
-    // worked in two sessions; otherwise fall back to the fixed break minutes.
     var lunchOut = toMinutes(day.lunchOut);
     var lunchIn = toMinutes(day.lunchIn);
+    // Incomplete split-shift punches — credit the half-day that was actually worked:
+    //  • Clocked out for lunch and never came back (lunch-out present, no lunch-in
+    //    and no afternoon-out) → the LUNCH-OUT is the day's time-out. The morning
+    //    half is worked; the afternoon counts as undertime.
+    //  • Clocked in only after lunch (lunch-in present, no morning-in and no
+    //    lunch-out) → the LUNCH-IN is the day's time-in. The afternoon half is
+    //    worked; the morning counts as late/undertime.
+    // No unpaid lunch is deducted in either case — none was taken (handled below
+    // by charging the break only where the worked span overlaps the lunch window).
+    if (lunchOut != null && lunchIn == null && outM == null) { outM = lunchOut; lunchOut = null; }
+    else if (lunchIn != null && inM == null && lunchOut == null) { inM = lunchIn; lunchIn = null; }
+    if (inM == null || outM == null) {
+      // No usable punches (paid leave / holiday-with-pay handled by payroll).
+      return result;
+    }
+    // Both lunch punches present ⇒ the ACTUAL lunch gap is the break and the day is
+    // worked in two sessions; otherwise it's one continuous span.
     var twoSession = (lunchOut != null && lunchIn != null);
     // Normalise a punch to sit at/after the morning time-in (for overnight spans).
     function afterIn(t) { var x = t; if (x < inM) x += 24 * 60; return x; }
     var outEnd = afterIn(outM);
+    // Employee schedule: explicit per-DTR-row value wins, then the weekday
+    // schedule, then the employee's base default shift.
+    var schedIn = toMinutes(hasVal(day.scheduledIn) ? day.scheduledIn : (ws && hasVal(ws.in) ? ws.in : opts.schedIn));
+    var schedOut = toMinutes(hasVal(day.scheduledOut) ? day.scheduledOut : (ws && hasVal(ws.out) ? ws.out : opts.schedOut));
+    // Standard (scheduled) unpaid lunch — the full-day benchmark and the default
+    // break when there are no explicit lunch punches.
+    var schedBrk = day.breakMins != null ? day.breakMins
+      : (ws && hasVal(ws.brk)) ? (parseInt(ws.brk, 10) || 0)
+      : (opts.defaultBreak != null ? opts.defaultBreak : 60);
     var brk, worked, nightMin;
     if (twoSession) {
       var loN = afterIn(lunchOut), liN = afterIn(lunchIn);
@@ -207,24 +227,26 @@
       // Night differential over the two worked sessions (excludes the lunch gap).
       nightMin = nightMinutes(inM, loN) + nightMinutes(liN, outEnd);
     } else {
-      brk = day.breakMins != null ? day.breakMins
-        : (ws && hasVal(ws.brk)) ? (parseInt(ws.brk, 10) || 0)
-        : (opts.defaultBreak != null ? opts.defaultBreak : 60);
+      // One continuous span. Deduct the unpaid lunch ONLY where the span actually
+      // overlaps the scheduled lunch window — so leaving at lunch (or arriving
+      // after it) isn't charged a break that was never taken.
+      if (schedIn != null && schedOut != null && schedBrk > 0) {
+        var span0 = schedOut - schedIn; if (span0 <= 0) span0 += 24 * 60;
+        var lStart = schedIn + Math.floor((span0 - schedBrk) / 2), lEnd = lStart + schedBrk;
+        brk = Math.max(0, Math.min(outEnd, lEnd) - Math.max(inM, lStart)); // span ∩ lunch
+      } else {
+        brk = schedBrk;
+      }
       worked = Math.max(0, (outEnd - inM) - brk);
       nightMin = nightMinutes(inM, outEnd);
     }
     result.workedMinutes = worked;
 
-    // Employee schedule: explicit per-DTR-row value wins, then the weekday
-    // schedule, then the employee's base default shift.
-    var schedIn = toMinutes(hasVal(day.scheduledIn) ? day.scheduledIn : (ws && hasVal(ws.in) ? ws.in : opts.schedIn));
-    var schedOut = toMinutes(hasVal(day.scheduledOut) ? day.scheduledOut : (ws && hasVal(ws.out) ? ws.out : opts.schedOut));
-
     if (schedIn != null && schedOut != null) {
       // ----- Schedule-based (identifies late / undertime / OT) -----
       var schedSpan = schedOut - schedIn;
       if (schedSpan <= 0) schedSpan += 24 * 60;
-      var required = day.requiredMinutes != null ? day.requiredMinutes : Math.max(0, schedSpan - brk);
+      var required = day.requiredMinutes != null ? day.requiredMinutes : Math.max(0, schedSpan - schedBrk);
       // Normalise the out time relative to the shift start for overnight shifts.
       var schedOutN = schedOut < schedIn ? schedOut + 24 * 60 : schedOut;
       var outN = outM;
@@ -236,10 +258,10 @@
       // the shift, so someone who leaves before lunch isn't docked the (unpaid)
       // lunch hour — e.g. sched 08:00–17:00 (1h lunch), out 12:00 → 4h undertime,
       // not 5h.
-      if (brk > 0 && !twoSession) {
+      if (schedBrk > 0 && !twoSession) {
         var ovlp = function (s1, e1, s2, e2) { return Math.max(0, Math.min(e1, e2) - Math.max(s1, s2)); };
-        var lunchStart = schedIn + Math.floor((schedSpan - brk) / 2);
-        var lunchEnd = lunchStart + brk;
+        var lunchStart = schedIn + Math.floor((schedSpan - schedBrk) / 2);
+        var lunchEnd = lunchStart + schedBrk;
         if (result.lateMinutes > 0) result.lateMinutes = Math.max(0, result.lateMinutes - ovlp(schedIn, inM, lunchStart, lunchEnd));
         if (result.undertimeMinutes > 0) result.undertimeMinutes = Math.max(0, result.undertimeMinutes - ovlp(outN, schedOutN, lunchStart, lunchEnd));
       }
